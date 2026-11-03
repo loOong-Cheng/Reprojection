@@ -22,6 +22,14 @@
 		{
 			"Name": "OpenXRHandTracking",
 			"Enabled": true
+		},
+		{
+			"Name": "RemoteControl",
+			"Enabled": true
+		},
+		{
+			"Name": "MCPUnreal",
+			"Enabled": true
 		}
 	],
 	"TargetPlatforms": [

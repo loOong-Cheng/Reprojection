@@ -31,6 +31,10 @@ Saved/
 *.xcodeproj/
 *.xcworkspace/
 
+# --- Tool caches -----------------------------------------------
+# Search index built by the mcp-unreal lookup_docs tool
+index.bleve/
+
 # --- OS junk ---------------------------------------------------
 Thumbs.db
 Desktop.ini

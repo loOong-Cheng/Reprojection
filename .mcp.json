@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "mcp-unreal": {
+      "command": "${USERPROFILE}\\go\\bin\\mcp-unreal.exe",
+      "env": {
+        "PLUGIN_PORT": "8090",
+        "RC_API_PORT": "30010"
+      }
+    }
+  }
+}
