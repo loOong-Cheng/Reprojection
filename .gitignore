@@ -1,0 +1,40 @@
+# =============================================================
+#  Unreal Engine 5 (C++) project
+#  The UE project lives in Reprojection/. Patterns below are
+#  unanchored so they also apply inside project plugins
+#  (Reprojection/Plugins/<Plugin>/Binaries, .../Intermediate).
+# =============================================================
+
+# --- Engine-generated / cache folders --------------------------
+Binaries/
+Intermediate/
+DerivedDataCache/
+Saved/
+# Note: Build/ is intentionally TRACKED (platform icons,
+# Android/Quest manifest additions, etc.).
+
+# --- IDE & generated project files -----------------------------
+# Regenerate via right-click .uproject > "Generate Visual Studio project files"
+*.sln
+*.slnx
+*.suo
+*.sdf
+*.opensdf
+*.VC.db
+*.VC.opendb
+.vsconfig
+.vs/
+.idea/
+.vscode/
+*.code-workspace
+*.DotSettings.user
+*.xcodeproj/
+*.xcworkspace/
+
+# --- OS junk ---------------------------------------------------
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# --- Claude Code (per-user) ------------------------------------
+.claude/settings.local.json
