@@ -3,6 +3,8 @@
 #include "Reprojection.h"
 #include "TeleopCVars.h"
 #include "TeleopGameMode.h"
+#include "TeleopPresenter.h"
+#include "InputActionValue.h"
 
 #include "Camera/CameraComponent.h"
 #include "Components/StaticMeshComponent.h"
@@ -148,8 +150,10 @@ void ATeleopOperatorPawn::RecordPoses(double Now)
 		// Desktop: fixed seated eye, optionally a synthetic yaw sweep for tests.
 		const float Amp = TeleopCVars::DebugHeadYawAmpDeg.GetValueOnGameThread();
 		const float Hz = TeleopCVars::DebugHeadYawHz.GetValueOnGameThread();
-		const float Yaw = Amp != 0.f ? Amp * FMath::Sin(2.0 * PI * Hz * Now) : 0.f;
-		Head = FTransform(FRotator(0.f, Yaw, 0.f), FVector(0.f, 0.f, DesktopEyeHeight));
+		const float Yaw = TeleopCVars::DebugHeadYawDeg.GetValueOnGameThread() + (Amp != 0.f ? Amp * FMath::Sin(2.0 * PI * Hz * Now) : 0.f);
+		const FVector Offset(TeleopCVars::DebugHeadOffsetX.GetValueOnGameThread(), TeleopCVars::DebugHeadOffsetY.GetValueOnGameThread(),
+			TeleopCVars::DebugHeadOffsetZ.GetValueOnGameThread());
+		Head = FTransform(FRotator(0.f, Yaw, 0.f), FVector(0.f, 0.f, DesktopEyeHeight) + Offset);
 		Camera->SetRelativeLocationAndRotation(Head.GetLocation(), Head.GetRotation());
 		bHeadValid = true;
 	}
@@ -232,10 +236,27 @@ void ATeleopOperatorPawn::SetupPlayerInputComponent(UInputComponent* PlayerInput
 		return Action;
 	};
 
+	auto MakeAxis = [this](const TCHAR* Name, const FKey& Key) -> UInputAction*
+	{
+		UInputAction* Action = NewObject<UInputAction>(this, Name);
+		Action->ValueType = EInputActionValueType::Axis1D;
+		MappingContext->MapKey(Action, Key);
+		Actions.Add(Action);
+		return Action;
+	};
+
 	UInputAction* CycleMethod = MakeAction(TEXT("IA_CycleMethod"), { EKeys::OculusTouch_Right_A_Click, EKeys::OculusTouch_Left_X_Click, EKeys::M });
-	UInputAction* Recenter = MakeAction(TEXT("IA_Recenter"), { EKeys::OculusTouch_Left_Menu_Click, EKeys::R });
+	UInputAction* Recenter = MakeAction(TEXT("IA_Recenter"), { EKeys::OculusTouch_Right_Thumbstick_Click, EKeys::R });
 	UInputAction* GrabLeft = MakeAction(TEXT("IA_GrabLeft"), { EKeys::OculusTouch_Left_Grip_Axis });
 	UInputAction* GrabRight = MakeAction(TEXT("IA_GrabRight"), { EKeys::OculusTouch_Right_Grip_Axis });
+	UInputAction* LatencyPreset = MakeAction(TEXT("IA_LatencyPreset"), { EKeys::OculusTouch_Right_B_Click, EKeys::OculusTouch_Left_Y_Click });
+	UInputAction* JitterBuffer = MakeAction(TEXT("IA_JitterBuffer"), { EKeys::OculusTouch_Right_Trigger_Axis });
+	UInputAction* DepthPreset = MakeAction(TEXT("IA_DepthPreset"), { EKeys::OculusTouch_Left_Thumbstick_Click });
+	UInputAction* Blind = MakeAction(TEXT("IA_Blind"), { EKeys::OculusTouch_Left_Menu_Click });
+	UInputAction* RightX = MakeAxis(TEXT("IA_RightStickX"), EKeys::OculusTouch_Right_Thumbstick_X);
+	UInputAction* RightY = MakeAxis(TEXT("IA_RightStickY"), EKeys::OculusTouch_Right_Thumbstick_Y);
+	UInputAction* LeftX = MakeAxis(TEXT("IA_LeftStickX"), EKeys::OculusTouch_Left_Thumbstick_X);
+	UInputAction* LeftY = MakeAxis(TEXT("IA_LeftStickY"), EKeys::OculusTouch_Left_Thumbstick_Y);
 
 	Input->BindAction(CycleMethod, ETriggerEvent::Started, this, &ATeleopOperatorPawn::OnCycleMethod);
 	Input->BindAction(Recenter, ETriggerEvent::Started, this, &ATeleopOperatorPawn::OnRecenter);
@@ -243,6 +264,17 @@ void ATeleopOperatorPawn::SetupPlayerInputComponent(UInputComponent* PlayerInput
 	Input->BindAction(GrabLeft, ETriggerEvent::Completed, this, &ATeleopOperatorPawn::OnGrabLeftReleased);
 	Input->BindAction(GrabRight, ETriggerEvent::Started, this, &ATeleopOperatorPawn::OnGrabRightPressed);
 	Input->BindAction(GrabRight, ETriggerEvent::Completed, this, &ATeleopOperatorPawn::OnGrabRightReleased);
+	Input->BindAction(LatencyPreset, ETriggerEvent::Started, this, &ATeleopOperatorPawn::OnCycleLatencyPreset);
+	Input->BindAction(JitterBuffer, ETriggerEvent::Started, this, &ATeleopOperatorPawn::OnToggleJitterBuffer);
+	Input->BindAction(DepthPreset, ETriggerEvent::Started, this, &ATeleopOperatorPawn::OnCycleDepthPreset);
+	Input->BindAction(Blind, ETriggerEvent::Started, this, &ATeleopOperatorPawn::OnToggleBlind);
+	for (const ETriggerEvent Event : { ETriggerEvent::Triggered, ETriggerEvent::Completed })
+	{
+		Input->BindAction(RightX, Event, this, &ATeleopOperatorPawn::OnRightStickX);
+		Input->BindAction(RightY, Event, this, &ATeleopOperatorPawn::OnRightStickY);
+		Input->BindAction(LeftX, Event, this, &ATeleopOperatorPawn::OnLeftStickX);
+		Input->BindAction(LeftY, Event, this, &ATeleopOperatorPawn::OnLeftStickY);
+	}
 
 	if (const APlayerController* PC = GetController<APlayerController>())
 	{
@@ -253,12 +285,73 @@ void ATeleopOperatorPawn::SetupPlayerInputComponent(UInputComponent* PlayerInput
 	}
 }
 
+ATeleopPresenter* ATeleopOperatorPawn::GetPresenter() const
+{
+	const ATeleopGameMode* GM = GetWorld() ? GetWorld()->GetAuthGameMode<ATeleopGameMode>() : nullptr;
+	return GM ? GM->GetPresenter() : nullptr;
+}
+
+int32 ATeleopOperatorPawn::Flick(float Axis, bool& bArmed)
+{
+	if (bArmed && FMath::Abs(Axis) > 0.7f)
+	{
+		bArmed = false;
+		return Axis > 0.f ? 1 : -1;
+	}
+	if (FMath::Abs(Axis) < 0.3f)
+	{
+		bArmed = true;
+	}
+	return 0;
+}
+
 void ATeleopOperatorPawn::OnCycleMethod()
 {
-	// Only the implemented methods: M0 -> GT -> M0 (M1-M4 join the cycle as they land).
-	const ETeleopMethod Current = static_cast<ETeleopMethod>(TeleopCVars::Method.GetValueOnGameThread());
-	const ETeleopMethod Next = Current == ETeleopMethod::GT ? ETeleopMethod::M0_Naive : ETeleopMethod::GT;
-	TeleopCVars::Method->Set(static_cast<int32>(Next), ECVF_SetByConsole);
+	if (ATeleopPresenter* P = GetPresenter()) { P->CycleMethod(); }
+}
+
+void ATeleopOperatorPawn::OnCycleLatencyPreset()
+{
+	if (ATeleopPresenter* P = GetPresenter()) { P->CycleLatencyPreset(); }
+}
+
+void ATeleopOperatorPawn::OnToggleJitterBuffer()
+{
+	if (ATeleopPresenter* P = GetPresenter()) { P->ToggleJitterBuffer(); }
+}
+
+void ATeleopOperatorPawn::OnCycleDepthPreset()
+{
+	if (ATeleopPresenter* P = GetPresenter()) { P->CycleDepthPreset(); }
+}
+
+void ATeleopOperatorPawn::OnToggleBlind()
+{
+	if (ATeleopPresenter* P = GetPresenter()) { P->ToggleBlindTest(); }
+}
+
+void ATeleopOperatorPawn::OnRightStickX(const FInputActionValue& Value)
+{
+	const int32 D = Flick(Value.Get<float>(), bRightXArmed);
+	if (D != 0) { if (ATeleopPresenter* P = GetPresenter()) { P->AdjustBaseLatency(D); } }
+}
+
+void ATeleopOperatorPawn::OnRightStickY(const FInputActionValue& Value)
+{
+	const int32 D = Flick(Value.Get<float>(), bRightYArmed);
+	if (D != 0) { if (ATeleopPresenter* P = GetPresenter()) { P->AdjustRating(D); } }
+}
+
+void ATeleopOperatorPawn::OnLeftStickX(const FInputActionValue& Value)
+{
+	const int32 D = Flick(Value.Get<float>(), bLeftXArmed);
+	if (D != 0) { if (ATeleopPresenter* P = GetPresenter()) { P->AdjustBaseline(D); } }
+}
+
+void ATeleopOperatorPawn::OnLeftStickY(const FInputActionValue& Value)
+{
+	const int32 D = Flick(Value.Get<float>(), bLeftYArmed);
+	if (D != 0) { if (ATeleopPresenter* P = GetPresenter()) { P->AdjustSphereRadius(D); } }
 }
 
 void ATeleopOperatorPawn::OnRecenter()

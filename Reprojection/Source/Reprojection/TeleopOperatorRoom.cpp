@@ -64,10 +64,12 @@ void ATeleopOperatorRoom::LayoutWalls()
 	const float T = WallThickness;
 	const float HX = InnerSize.X * 0.5f;
 	const float HY = InnerSize.Y * 0.5f;
-	const float H = InnerSize.Z;
+	const float Bottom = FloorZ;
+	const float Top = FloorZ + InnerSize.Z;
+	const float MidZ = (Bottom + Top) * 0.5f;
 	const float OuterX = InnerSize.X + 2.f * T;
 	const float OuterY = InnerSize.Y + 2.f * T;
-	const float OuterZ = H + 2.f * T;
+	const float OuterZ = InnerSize.Z + 2.f * T;
 
 	auto Place = [](UStaticMeshComponent* Panel, const FVector& Center, const FVector& SizeCm)
 	{
@@ -75,10 +77,10 @@ void ATeleopOperatorRoom::LayoutWalls()
 		Panel->SetRelativeScale3D(SizeCm / 100.f);
 	};
 
-	Place(Panels[0], FVector(0.f, 0.f, -T * 0.5f),        FVector(OuterX, OuterY, T)); // floor, top face at Z = 0
-	Place(Panels[1], FVector(0.f, 0.f, H + T * 0.5f),     FVector(OuterX, OuterY, T)); // ceiling
-	Place(Panels[2], FVector(HX + T * 0.5f, 0.f, H * 0.5f),  FVector(T, OuterY, OuterZ)); // front
-	Place(Panels[3], FVector(-HX - T * 0.5f, 0.f, H * 0.5f), FVector(T, OuterY, OuterZ)); // back
-	Place(Panels[4], FVector(0.f, HY + T * 0.5f, H * 0.5f),  FVector(OuterX, T, OuterZ)); // right
-	Place(Panels[5], FVector(0.f, -HY - T * 0.5f, H * 0.5f), FVector(OuterX, T, OuterZ)); // left
+	Place(Panels[0], FVector(0.f, 0.f, Bottom - T * 0.5f),  FVector(OuterX, OuterY, T)); // floor, top face at FloorZ
+	Place(Panels[1], FVector(0.f, 0.f, Top + T * 0.5f),     FVector(OuterX, OuterY, T)); // ceiling
+	Place(Panels[2], FVector(HX + T * 0.5f, 0.f, MidZ),     FVector(T, OuterY, OuterZ)); // front
+	Place(Panels[3], FVector(-HX - T * 0.5f, 0.f, MidZ),    FVector(T, OuterY, OuterZ)); // back
+	Place(Panels[4], FVector(0.f, HY + T * 0.5f, MidZ),     FVector(OuterX, T, OuterZ)); // right
+	Place(Panels[5], FVector(0.f, -HY - T * 0.5f, MidZ),    FVector(OuterX, T, OuterZ)); // left
 }

@@ -3,6 +3,7 @@
 #include "CoreMinimal.h"
 #include "GameFramework/GameModeBase.h"
 #include "TeleopLatencyModel.h"
+#include "TeleopLogger.h"
 #include "TeleopGameMode.generated.h"
 
 class ARemoteHand;
@@ -10,6 +11,7 @@ class ARobotHead;
 class ATeleopOperatorPawn;
 class ATeleopOperatorRoom;
 class ATeleopPresenter;
+class ATeleopProps;
 
 /**
  * Session coordinator. The Template map stays the remote world; this game mode:
@@ -46,6 +48,12 @@ public:
 
 	FTeleopLatencyModel& GetLatencyModel() { return LatencyModel; }
 
+	/** Per-session CSV logger (null before the session starts). */
+	FTeleopLogger* GetLogger() const { return Logger.Get(); }
+
+	UFUNCTION(BlueprintPure, Category = "Teleop")
+	ATeleopProps* GetProps() const { return Props; }
+
 	UFUNCTION(BlueprintPure, Category = "Teleop")
 	ARobotHead* GetRobotHead() const { return RobotHead; }
 
@@ -77,8 +85,10 @@ private:
 	UPROPERTY(Transient) TObjectPtr<ARemoteHand> LeftHand;
 	UPROPERTY(Transient) TObjectPtr<ARemoteHand> RightHand;
 	UPROPERTY(Transient) TObjectPtr<ATeleopPresenter> Presenter;
+	UPROPERTY(Transient) TObjectPtr<ATeleopProps> Props;
 
 	FTeleopLatencyModel LatencyModel;
+	TUniquePtr<FTeleopLogger> Logger;
 
 	FTransform Calibration = FTransform::Identity;
 	float CalibratedEyeHeight = 120.f;

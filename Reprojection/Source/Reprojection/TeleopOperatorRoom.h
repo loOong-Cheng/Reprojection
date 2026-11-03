@@ -24,9 +24,14 @@ public:
 
 	virtual void OnConstruction(const FTransform& Transform) override;
 
-	/** Inner size of the room (X depth, Y width, Z height), cm. The seat is at the floor center. */
+	/** Inner size of the room (X depth, Y width, Z height), cm. The seat is at the center. Large, because the M3
+	 *  depth mesh renders the remote geometry at its true distance inside this room and must not hit the walls. */
 	UPROPERTY(EditAnywhere, Category = "Teleop")
-	FVector InnerSize = FVector(400.f, 400.f, 300.f);
+	FVector InnerSize = FVector(3000.f, 3000.f, 1500.f);
+
+	/** Height of the visible floor below the seat, cm (below the remote floor at 0, so the M3 floor never z-fights). */
+	UPROPERTY(EditAnywhere, Category = "Teleop")
+	float FloorZ = -100.f;
 
 	UPROPERTY(EditAnywhere, Category = "Teleop", meta = (ClampMin = "1.0"))
 	float WallThickness = 20.f;

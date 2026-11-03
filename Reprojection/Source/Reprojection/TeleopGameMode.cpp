@@ -6,6 +6,7 @@
 #include "TeleopOperatorPawn.h"
 #include "TeleopOperatorRoom.h"
 #include "TeleopPresenter.h"
+#include "TeleopProps.h"
 
 #include "Engine/World.h"
 #include "EngineUtils.h"
@@ -85,6 +86,9 @@ void ATeleopGameMode::SetupSession(ATeleopOperatorPawn* Pawn)
 	Params.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
 	const FTransform Station = GetStationTransform();
 
+	Logger = MakeUnique<FTeleopLogger>();
+	Props = World->SpawnActor<ATeleopProps>(ATeleopProps::StaticClass(), Station, Params);
+
 	LeftHand = World->SpawnActor<ARemoteHand>(ARemoteHand::StaticClass(), Station, Params);
 	RightHand = World->SpawnActor<ARemoteHand>(ARemoteHand::StaticClass(), Station, Params);
 	LeftHand->Init(true, this, Pawn);
@@ -104,6 +108,7 @@ void ATeleopGameMode::SetupSession(ATeleopOperatorPawn* Pawn)
 void ATeleopGameMode::Tick(float DeltaSeconds)
 {
 	Super::Tick(DeltaSeconds);
+	LatencyModel.TickCommandChannel(DeltaSeconds);
 	if (!bCalibrated && OperatorPawn)
 	{
 		FTransform Head;

@@ -1,13 +1,20 @@
 // Presentation of robot camera frames in the operator's view (HANDOFF §6).
 // Included from M_TeleopPresent (post process, Scene Color Before Bloom) as "/Reprojection/Teleop/Present.ush".
 //
-// Conventions: UE view space is x right, y up, z forward. Robot frames are pinhole images with horizontal
-// FOV 2*atan(TanHalfFov.x), uv (0,0) top-left, v down. RGB = linear scene color, A = view-space depth (cm).
+// Each eye uses only its own robot camera frame and pose (left eye -> left frame).
 #pragma once
 
-#include "/Reprojection/Teleop/EyeTest.ush"
+#include "/Reprojection/Teleop/Camera.ush"
 
-// Direction of the current pixel in the current eye's view space.
+struct FTeleopEyeCam
+{
+	float3 Pos;
+	float3 Fwd;
+	float3 Right;
+	float3 Up;
+};
+
+// Direction of the current pixel in the current eye's view space (x right, y up, z forward).
 float3 Teleop_PixelViewDir(float2 ViewportUV)
 {
 	const float2 NDC = float2(ViewportUV.x * 2.0 - 1.0, 1.0 - ViewportUV.y * 2.0);
@@ -16,26 +23,6 @@ float3 Teleop_PixelViewDir(float2 ViewportUV)
 	return normalize(V.xyz / V.w);
 }
 
-// Pinhole projection of a camera-space direction to uv.
-float2 Teleop_ProjectDir(float3 Dir, float2 TanHalfFov)
-{
-	const float InvZ = 1.0 / max(Dir.z, 1e-4);
-	return float2(0.5 + 0.5 * Dir.x * InvZ / TanHalfFov.x,
-	              0.5 - 0.5 * Dir.y * InvZ / TanHalfFov.y);
-}
-
-// 1 inside the frame, fading to 0 over Feather (uv units) at the border, 0 outside or behind.
-float Teleop_FrameWeight(float2 UV, float3 Dir, float Feather)
-{
-	if (Dir.z <= 1e-4)
-	{
-		return 0.0;
-	}
-	const float2 Edge = saturate(min(UV, 1.0 - UV) / max(Feather, 1e-4));
-	return Edge.x * Edge.y;
-}
-
-// Each eye samples its own robot camera: left eye -> left frame, right eye -> right frame.
 float4 Teleop_SampleEyeFrame(Texture2D LeftTex, SamplerState LeftSampler, Texture2D RightTex, SamplerState RightSampler, float2 UV)
 {
 	if (Teleop_EyeIndex() < 0.5)
@@ -45,13 +32,47 @@ float4 Teleop_SampleEyeFrame(Texture2D LeftTex, SamplerState LeftSampler, Textur
 	return Texture2DSampleLevel(RightTex, RightSampler, UV, 0);
 }
 
-// M0 naive head-locked: the newest frame is shown as if the robot camera were the current eye (no compensation).
+// M0 naive head-locked: the newest frame shown as if the robot camera were the current eye (no compensation).
 float3 Teleop_PresentM0(float2 ViewportUV, Texture2D LeftTex, SamplerState LeftSampler, Texture2D RightTex, SamplerState RightSampler,
 	float2 TanHalfFov, float Feather)
 {
 	const float3 Dir = Teleop_PixelViewDir(ViewportUV);
-	const float2 UV = Teleop_ProjectDir(Dir, TanHalfFov);
-	const float W = Teleop_FrameWeight(UV, Dir, Feather);
+	if (Dir.z <= 1e-4)
+	{
+		return 0.0;
+	}
+	const float2 UV = float2(0.5 + 0.5 * Dir.x / Dir.z / TanHalfFov.x, 0.5 - 0.5 * Dir.y / Dir.z / TanHalfFov.y);
+	const float W = Teleop_FrameWeight(UV, Feather);
+	if (W <= 0.0)
+	{
+		return 0.0;
+	}
+	return Teleop_SampleEyeFrame(LeftTex, LeftSampler, RightTex, RightSampler, saturate(UV)).rgb * W;
+}
+
+// M1 / M2 sphere (rotation compensation): intersect the current eye ray with a sphere of radius R around the
+// capture-time camera position, project the hit point with that frame's camera, sample.
+float3 Teleop_PresentSphere(float2 ViewportUV, Texture2D LeftTex, SamplerState LeftSampler, Texture2D RightTex, SamplerState RightSampler,
+	FTeleopEyeCam CamL, FTeleopEyeCam CamR, float2 TanHalfFov, float Radius, float Feather,
+	float3 RoomSeat, float3 MapX, float3 MapY, float3 MapZ, float3 MapT)
+{
+	FTeleopEyeCam Cam = CamR; // HLSL 2021: no ?: on structs
+	if (Teleop_EyeIndex() < 0.5)
+	{
+		Cam = CamL;
+	}
+
+	const float3 O = Teleop_RoomLocalToRemote(Teleop_EyeRoomLocal(RoomSeat), MapX, MapY, MapZ, MapT);
+	const float3 V = normalize(Teleop_RoomToRemoteDir(Teleop_PixelWorldDir(ViewportUV), MapX, MapY, MapZ));
+
+	const float S = Teleop_RaySphere(O, V, Cam.Pos, Radius);
+	if (S <= 0.0)
+	{
+		return 0.0;
+	}
+	float Z;
+	const float2 UV = Teleop_CamProject(O + S * V, Cam.Pos, Cam.Fwd, Cam.Right, Cam.Up, TanHalfFov, Z);
+	const float W = Z > 0.0 ? Teleop_FrameWeight(UV, Feather) : 0.0;
 	if (W <= 0.0)
 	{
 		return 0.0;

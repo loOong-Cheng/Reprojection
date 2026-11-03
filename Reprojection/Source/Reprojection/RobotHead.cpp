@@ -3,7 +3,9 @@
 #include "FrameRingBuffer.h"
 #include "Reprojection.h"
 #include "TeleopCVars.h"
+#include "TeleopDepthDegrader.h"
 #include "TeleopGameMode.h"
+#include "TeleopLogger.h"
 #include "TeleopOperatorPawn.h"
 
 #include "Components/SceneCaptureComponent2D.h"
@@ -64,6 +66,9 @@ void ARobotHead::BeginPlay()
 
 	Buffer = NewObject<UFrameRingBuffer>(this, TEXT("FrameRingBuffer"));
 	Buffer->Initialize(NumSlots, CaptureWidth, CaptureHeight);
+
+	Degrader = NewObject<UTeleopDepthDegrader>(this, TEXT("DepthDegrader"));
+	Degrader->Initialize(this);
 
 	// Captures need a target at registration time; the real target is switched per frame.
 	CameraLeft->TextureTarget = Buffer->GetTexture(0, 0);
@@ -209,12 +214,63 @@ void ARobotHead::CaptureFrame(double Now)
 	Meta.CaptureTime = Now;
 	Meta.ArrivalTime = Now + Latency.LatencySeconds;
 	Meta.bDropped = Latency.bDropped;
+	Meta.bBadState = Latency.bBadState;
 	Meta.EyeWorld[0] = CameraLeft->GetComponentTransform();
 	Meta.EyeWorld[1] = CameraRight->GetComponentTransform();
 	Meta.HorizontalFovDeg = HorizontalFovDeg;
 	Meta.Width = CaptureWidth;
 	Meta.Height = CaptureHeight;
+	UpdateDepth(Slot, Meta, Now);
 	Buffer->Commit(Slot, Meta);
 
+	if (FTeleopLogger* Logger = GM->GetLogger())
+	{
+		Logger->LogCapture(Meta, TeleopCVars::LatencyPreset.GetValueOnGameThread());
+	}
+
 	++RateWindowCount;
+}
+
+void ARobotHead::UpdateDepth(int32 Slot, FTeleopFrameMeta& Meta, double Now)
+{
+	if (!Degrader)
+	{
+		return;
+	}
+	const FTeleopDepthPreset& P = UTeleopDepthDegrader::GetActivePreset();
+	const int32 K = FMath::Max(P.K, 1);
+	const int32 DW = FMath::Max(CaptureWidth / K, 1);
+	const int32 DH = FMath::Max(CaptureHeight / K, 1);
+	const bool bResized = DW != Buffer->GetDepthWidth() || DH != Buffer->GetDepthHeight();
+	Buffer->EnsureDepthTextures(DW, DH);
+	if (bResized)
+	{
+		LastDepthSlot = INDEX_NONE;
+	}
+
+	// Depth can run slower than color (HANDOFF §5.6): then this color frame gets the last (older) depth.
+	const bool bDepthDue = P.DepthHz <= 0.f || LastDepthSlot == INDEX_NONE
+		|| Now - LastDepthTime >= 1.0 / P.DepthHz - 0.002;
+	const float BaselineCm = TeleopCVars::BaselineMm.GetValueOnGameThread() * 0.1f;
+
+	if (bDepthDue)
+	{
+		for (int32 Eye = 0; Eye < 2; ++Eye)
+		{
+			Degrader->Degrade(Buffer->GetTexture(Slot, Eye), Buffer->GetDepthTexture(Slot, Eye), Eye, Meta.FrameId, HorizontalFovDeg, BaselineCm);
+		}
+		LastDepthSlot = Slot;
+		LastDepthTime = Now;
+		Meta.DepthCaptureTime = Now;
+	}
+	else
+	{
+		for (int32 Eye = 0; Eye < 2; ++Eye)
+		{
+			Degrader->Copy(Buffer->GetDepthTexture(LastDepthSlot, Eye), Buffer->GetDepthTexture(Slot, Eye));
+		}
+		Meta.DepthCaptureTime = LastDepthTime;
+		LastDepthSlot = Slot; // the copy now holds the latest depth (the old slot may be reused)
+	}
+	Meta.bDepthValid = true;
 }

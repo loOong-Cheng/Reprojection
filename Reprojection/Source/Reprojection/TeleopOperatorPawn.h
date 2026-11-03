@@ -21,8 +21,14 @@ class UTextRenderComponent;
  * Every tick it records the HMD and controller poses in its own tracking frame (relative to VROrigin);
  * the robot head and proxy hands read these streams delayed by the command latency.
  *
- * Dev controls (until the HANDOFF §8 layout): right A / left X = cycle method, grips = grab (proxy hands),
- * left menu or R = recenter. Desktop (no HMD): teleop.Debug.HeadYawAmpDeg gives a synthetic head sweep.
+ * Controls (HANDOFF §8, adapted so nothing collides with grabbing):
+ *   A / X        cycle method M0 > M1 > M2 > M3 > M4 > GT (blind test: confirm / next question)
+ *   B / Y        cycle latency preset            right stick X   base latency -/+ 10 ms
+ *   right trigger  jitter buffer on/off          right stick Y   blind-test rating -/+
+ *   left stick click  cycle depth preset         left stick Y / X  sphere radius R -/+ 10 cm, baseline b -/+ 5 mm
+ *   left menu    blind test start/stop           right stick click (or R)  recenter
+ *   grips        grab with the proxy hands
+ * Desktop (no HMD): teleop.Debug.HeadYawAmpDeg / HeadOffset* give synthetic head motion for tests.
  */
 UCLASS()
 class REPROJECTION_API ATeleopOperatorPawn : public APawn
@@ -50,6 +56,10 @@ public:
 	void SetHudText(const FString& Text);
 
 	UCameraComponent* GetCamera() const { return Camera; }
+	USceneComponent* GetVROrigin() const { return VROrigin; }
+
+	/** Where the pawn sits in the operator room (seat on the floor; no rotation). */
+	const FTransform& GetRoomTransform() const { return RoomTransform; }
 
 	/** Custom-stencil value of things in the room the presentation post process must not cover (HUD). */
 	static constexpr int32 HudStencilValue = 1;
@@ -105,6 +115,23 @@ private:
 	void OnGrabRightPressed() { ForwardGrab(false, true); }
 	void OnGrabRightReleased() { ForwardGrab(false, false); }
 	void ForwardGrab(bool bLeft, bool bPressed);
+	void OnCycleLatencyPreset();
+	void OnToggleJitterBuffer();
+	void OnCycleDepthPreset();
+	void OnToggleBlind();
+	void OnRightStickX(const struct FInputActionValue& Value);
+	void OnRightStickY(const struct FInputActionValue& Value);
+	void OnLeftStickX(const struct FInputActionValue& Value);
+	void OnLeftStickY(const struct FInputActionValue& Value);
+
+	/** Stick flick: returns +1 / -1 once when the axis crosses +-0.7, then re-arms below 0.3. */
+	static int32 Flick(float Axis, bool& bArmed);
+	class ATeleopPresenter* GetPresenter() const;
+
+	bool bRightXArmed = true;
+	bool bRightYArmed = true;
+	bool bLeftXArmed = true;
+	bool bLeftYArmed = true;
 
 	FTeleopPoseHistory Histories[static_cast<int32>(ETeleopDevice::Num)];
 	bool bHasPose[static_cast<int32>(ETeleopDevice::Num)] = { false, false, false };

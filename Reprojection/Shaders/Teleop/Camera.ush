@@ -1,0 +1,82 @@
+// Robot camera model and operator-room <-> remote-world mapping (HANDOFF §6, §7.2, §7.3).
+// Mirrors FTeleopPinhole in TeleopMath.h (round-trip unit tested in C++).
+//
+// Robot camera: pinhole at Pos, looking along Fwd, with Right / Up axes (orthonormal, UE world, cm).
+// uv (0,0) = top-left, v down. Depth z is view-space z along Fwd (cm), NOT radial distance.
+//
+// Mapping: remote = MapRot * roomLocal + MapT, roomLocal = roomWorld - RoomSeat.
+// MapRot is given by its columns MapX, MapY, MapZ (= MapRot applied to the unit axes).
+#pragma once
+
+#include "/Reprojection/Teleop/EyeTest.ush"
+
+float2 Teleop_CamProject(float3 P, float3 CamPos, float3 CamFwd, float3 CamRight, float3 CamUp, float2 TanHalfFov, out float Z)
+{
+	const float3 D = P - CamPos;
+	Z = dot(D, CamFwd);
+	const float InvZ = 1.0 / max(Z, 1e-3);
+	return float2(0.5 + 0.5 * dot(D, CamRight) * InvZ / TanHalfFov.x,
+	              0.5 - 0.5 * dot(D, CamUp) * InvZ / TanHalfFov.y);
+}
+
+float3 Teleop_CamUnproject(float2 UV, float Z, float3 CamPos, float3 CamFwd, float3 CamRight, float3 CamUp, float2 TanHalfFov)
+{
+	const float X = (UV.x * 2.0 - 1.0) * TanHalfFov.x;
+	const float Y = (1.0 - UV.y * 2.0) * TanHalfFov.y;
+	return CamPos + Z * (CamFwd + X * CamRight + Y * CamUp);
+}
+
+// Smallest positive s with |O + s V - Center| = R (V normalized); -1 if the ray misses.
+float Teleop_RaySphere(float3 O, float3 V, float3 Center, float R)
+{
+	const float3 L = O - Center;
+	const float B = dot(V, L);
+	const float C = dot(L, L) - R * R;
+	const float Disc = B * B - C;
+	if (Disc < 0.0)
+	{
+		return -1.0;
+	}
+	const float SqrtDisc = sqrt(Disc);
+	const float S1 = -B - SqrtDisc;
+	const float S2 = -B + SqrtDisc;
+	return S1 > 0.0 ? S1 : (S2 > 0.0 ? S2 : -1.0);
+}
+
+float3 Teleop_RoomToRemoteDir(float3 D, float3 MapX, float3 MapY, float3 MapZ)
+{
+	return MapX * D.x + MapY * D.y + MapZ * D.z;
+}
+
+float3 Teleop_RoomLocalToRemote(float3 RoomLocal, float3 MapX, float3 MapY, float3 MapZ, float3 MapT)
+{
+	return Teleop_RoomToRemoteDir(RoomLocal, MapX, MapY, MapZ) + MapT;
+}
+
+float3 Teleop_RemoteToRoomLocal(float3 P, float3 MapX, float3 MapY, float3 MapZ, float3 MapT)
+{
+	const float3 Q = P - MapT;
+	return float3(dot(MapX, Q), dot(MapY, Q), dot(MapZ, Q)); // MapRot^T * Q
+}
+
+// Current eye position in the operator room, relative to the seat (precise enough at 1 km: ~0.1 mm).
+float3 Teleop_EyeRoomLocal(float3 RoomSeat)
+{
+	return DFHackToFloat(ResolvedView.WorldCameraOrigin) - RoomSeat;
+}
+
+// Current pixel's world-space (room) view direction.
+float3 Teleop_PixelWorldDir(float2 ViewportUV)
+{
+	const float2 NDC = float2(ViewportUV.x * 2.0 - 1.0, 1.0 - ViewportUV.y * 2.0);
+	const float4 V = mul(float4(NDC, 0.5, 1.0), ResolvedView.ClipToView);
+	const float3 DirView = V.xyz / V.w;
+	return normalize(mul(DirView, (float3x3)ResolvedView.ViewToTranslatedWorld));
+}
+
+// 1 inside the frame, fading to 0 over Feather (uv units) at the border.
+float Teleop_FrameWeight(float2 UV, float Feather)
+{
+	const float2 Edge = saturate(min(UV, 1.0 - UV) / max(Feather, 1e-4));
+	return Edge.x * Edge.y;
+}

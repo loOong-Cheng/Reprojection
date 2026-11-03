@@ -1,0 +1,122 @@
+// Sparse, imperfect depth from the full capture depth (HANDOFF §5). Two passes per eye, drawn with
+// DrawMaterialToRenderTarget into low-resolution targets (capture resolution / k):
+//   1) M_TeleopDepthMinMax: per k x k block, min and max of the true depth (min, not average: no flying pixels).
+//   2) M_TeleopDepthDegrade: edge fattening, edge holes, disparity-domain noise + 1/8 px quantization,
+//      valid range, spatially blocky random holes. Output: depth z' in cm, 0 = invalid (hole).
+// The ground truth depth (scene depth) is only used here, to build the degraded depth (HANDOFF §6.1).
+#pragma once
+
+float Teleop_Hash12(float2 P, float Seed)
+{
+	const float3 P3 = frac(float3(P.xyx + Seed * float3(0.1031, 0.1030, 0.0973)) * float3(0.1031, 0.1030, 0.0973));
+	const float3 Q = P3 + dot(P3, P3.yzx + 33.33);
+	return frac((Q.x + Q.y) * Q.z);
+}
+
+// Standard normal from two hashes (Box-Muller).
+float Teleop_Gaussian(float2 Pix, float Seed)
+{
+	const float U1 = max(Teleop_Hash12(Pix * 1.37 + 11.0, Seed), 1e-6);
+	const float U2 = Teleop_Hash12(Pix * 2.11 + 47.0, Seed + 7.0);
+	return sqrt(-2.0 * log(U1)) * cos(6.2831853 * U2);
+}
+
+// Smooth value noise in [0, 1) on a lattice of size 1 (call with Pix / CellSize for blocky holes).
+float Teleop_ValueNoise(float2 X, float Seed)
+{
+	const float2 I = floor(X);
+	const float2 F = frac(X);
+	const float2 W = F * F * (3.0 - 2.0 * F);
+	const float A = Teleop_Hash12(I, Seed);
+	const float B = Teleop_Hash12(I + float2(1, 0), Seed);
+	const float C = Teleop_Hash12(I + float2(0, 1), Seed);
+	const float D = Teleop_Hash12(I + float2(1, 1), Seed);
+	return lerp(lerp(A, B, W.x), lerp(C, D, W.x), W.y);
+}
+
+// Pass 1. OutUV = output texel center, OutTexel = 1 / output size, K = block size in source texels.
+// Source alpha = scene depth (view-space z, cm).
+float2 Teleop_DepthBlockMinMax(Texture2D Src, SamplerState SrcSampler, float2 OutUV, float2 SrcTexel, float2 OutTexel, float K)
+{
+	const float2 Block = floor(OutUV / OutTexel);
+	const float2 Origin = Block * K * SrcTexel;
+	const int N = (int)K;
+	float Mn = 1e9;
+	float Mx = 0.0;
+	[loop] for (int j = 0; j < N; ++j)
+	{
+		[loop] for (int i = 0; i < N; ++i)
+		{
+			const float Z = Texture2DSampleLevel(Src, SrcSampler, Origin + (float2(i, j) + 0.5) * SrcTexel, 0).a;
+			Mn = min(Mn, Z);
+			Mx = max(Mx, Z);
+		}
+	}
+	return float2(Mn, Mx);
+}
+
+// Pass 2. UV / Texel in the low-resolution depth image. FocalPx: focal length in full-resolution (camera) pixels,
+// because the disparity noise and 1/8 px quantization belong to the stereo matcher on the camera images.
+// Quantize: 1 = quantize disparity to 1/8 px (off for DepthGT). ZMin/ZMax: valid range (cm).
+float Teleop_DepthDegrade(Texture2D MinMax, SamplerState MinMaxSampler, float2 UV, float2 Texel,
+	float FocalPx, float BaselineCm, float SigmaDisp, float Quantize, float ZMin, float ZMax,
+	float PHole, float HoleCellPx, float EdgeHolePx, float EdgeDispPx, float FattenPx, float Seed)
+{
+	const float FB = FocalPx * BaselineCm;
+	float Z = Texture2DSampleLevel(MinMax, MinMaxSampler, UV, 0).r;
+
+	// Edge fattening: foreground depth spills FattenPx pixels toward the background (min over the radius).
+	const int F = (int)FattenPx;
+	[loop] for (int fy = -F; fy <= F; ++fy)
+	{
+		[loop] for (int fx = -F; fx <= F; ++fx)
+		{
+			Z = min(Z, Texture2DSampleLevel(MinMax, MinMaxSampler, UV + float2(fx, fy) * Texel, 0).r);
+		}
+	}
+
+	// Edge holes: stereo matching fails around depth discontinuities (occlusion boundaries). A discontinuity is a
+	// disparity jump between adjacent depth samples (slanted surfaces change disparity smoothly and are kept).
+	const int E = (int)EdgeHolePx;
+	[loop] for (int y = -E; y <= E && E > 0; ++y)
+	{
+		[loop] for (int x = -E; x <= E; ++x)
+		{
+			const float2 P = UV + float2(x, y) * Texel;
+			const float D0 = FB / max(Texture2DSampleLevel(MinMax, MinMaxSampler, P, 0).r, 1e-3);
+			const float DR = FB / max(Texture2DSampleLevel(MinMax, MinMaxSampler, P + float2(Texel.x, 0), 0).r, 1e-3);
+			const float DD = FB / max(Texture2DSampleLevel(MinMax, MinMaxSampler, P + float2(0, Texel.y), 0).r, 1e-3);
+			if (abs(D0 - DR) > EdgeDispPx || abs(D0 - DD) > EdgeDispPx)
+			{
+				return 0.0;
+			}
+		}
+	}
+
+	const float2 Pix = floor(UV / Texel);
+
+	// Disparity-domain noise: d = f b / z, d' = d + N(0, sigma), quantized, z' = f b / d' (error grows with z^2).
+	const float D = FB / max(Z, 1e-3);
+	float D2 = D + Teleop_Gaussian(Pix, Seed) * SigmaDisp;
+	if (Quantize > 0.5)
+	{
+		D2 = round(D2 * 8.0) / 8.0;
+	}
+	const float DMin = FB / ZMax;
+	if (D2 <= max(DMin, 1e-4))
+	{
+		return 0.0;
+	}
+	const float Z2 = FB / D2;
+	if (Z2 < ZMin || Z2 > ZMax)
+	{
+		return 0.0;
+	}
+
+	// Spatially blocky random holes (low-frequency noise mask, not per-pixel dropout).
+	if (PHole > 0.0 && Teleop_ValueNoise(Pix / max(HoleCellPx, 1.0), Seed) < PHole)
+	{
+		return 0.0;
+	}
+	return Z2;
+}

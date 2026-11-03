@@ -1,0 +1,52 @@
+// M3 depth-mesh reprojection (HANDOFF §6): a grid covering the robot camera's uv [0,1]^2, displaced in the
+// vertex shader to c + z * ray(u, v) (z along the view axis) with the degraded depth, then rendered from the
+// current eye. Triangles across depth discontinuities (rubber sheet) and with invalid depth are discarded.
+// Included from M_TeleopDepthMesh as "/Reprojection/Teleop/DepthMesh.ush".
+#pragma once
+
+#include "/Reprojection/Teleop/Camera.ush"
+
+float Teleop_SampleEyeDepth(Texture2D DepthL, SamplerState SL, Texture2D DepthR, SamplerState SR, float2 UV)
+{
+	if (Teleop_EyeIndex() < 0.5)
+	{
+		return Texture2DSampleLevel(DepthL, SL, UV, 0).r;
+	}
+	return Texture2DSampleLevel(DepthR, SR, UV, 0).r;
+}
+
+// Vertex stage. LocalPos: the vertex position in the mesh component's space (= operator room, seat origin, no
+// rotation). Returns the world position offset; Valid = 1 if the vertex has depth and no discontinuity next to it.
+float3 Teleop_DepthMeshOffset(float2 UV, float3 LocalPos, float2 GridStep,
+	Texture2D DepthL, SamplerState SL, Texture2D DepthR, SamplerState SR,
+	float3 CamPosL, float3 CamFwdL, float3 CamRightL, float3 CamUpL,
+	float3 CamPosR, float3 CamFwdR, float3 CamRightR, float3 CamUpR,
+	float2 TanHalfFov, float EdgeDispPx, float DispScale, float3 MapX, float3 MapY, float3 MapZ, float3 MapT,
+	out float Valid)
+{
+	Valid = 0.0;
+	const float ZSampled = Teleop_SampleEyeDepth(DepthL, SL, DepthR, SR, UV);
+	// Invalid vertices stay on their camera ray (at 5 m) so the triangles that get discarded remain small on screen.
+	const bool bHasDepth = ZSampled > 0.0;
+	const float Z = bHasDepth ? ZSampled : 500.0;
+
+	// Rubber sheet: a neighbor across a depth discontinuity (disparity jump > EdgeDispPx at the reference
+	// disparity scale DispScale = f * b) marks this vertex; triangles touching it are discarded.
+	float MaxJump = 0.0;
+	const float D = DispScale / Z;
+	const float2 Offsets[4] = { float2(GridStep.x, 0), float2(-GridStep.x, 0), float2(0, GridStep.y), float2(0, -GridStep.y) };
+	[unroll] for (int i = 0; i < 4; ++i)
+	{
+		const float N = Teleop_SampleEyeDepth(DepthL, SL, DepthR, SR, saturate(UV + Offsets[i]));
+		if (N > 0.0)
+		{
+			MaxJump = max(MaxJump, abs(DispScale / N - D));
+		}
+	}
+	const bool bLeft = Teleop_EyeIndex() < 0.5;
+	const float3 P = bLeft
+		? Teleop_CamUnproject(UV, Z, CamPosL, CamFwdL, CamRightL, CamUpL, TanHalfFov)
+		: Teleop_CamUnproject(UV, Z, CamPosR, CamFwdR, CamRightR, CamUpR, TanHalfFov);
+	Valid = (bHasDepth && MaxJump <= EdgeDispPx) ? 1.0 : 0.0;
+	return Teleop_RemoteToRoomLocal(P, MapX, MapY, MapZ, MapT) - LocalPos;
+}

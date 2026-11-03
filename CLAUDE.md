@@ -31,10 +31,24 @@ imperfect depth, and lets the operator switch presentation/compensation methods 
   - `ARobotHead` (S2): neck (Fixed / Rot2DoF / Rot3DoF / Full6DoF, tau 40 ms, 300 deg/s, 2000 deg/s^2),
     camera mount 10 cm fwd / 5 cm up, baseline b, stereo `SceneCapture2D` at f_cam into `UFrameRingBuffer`
     (24 slots x 2 eyes, RGBA16f: RGB scene color, A depth cm).
-  - `ATeleopPresenter`: newest frame with A_i <= now (never older than shown), feeds `M_TeleopPresent`;
-    frame-age stats logged as `[stats]` every second and shown on the HUD.
-  - All tunables: `teleop.*` console variables in `TeleopCVars.cpp` (Method, LatencyMs, CmdLatencyMs, CamHz,
-    BaselineMm, CamMountOffset, NeckMode, EyeTest, Debug.HeadYaw*), plus `teleop.Recenter`.
+  - `UTeleopDepthDegrader` (S6, §5): per captured frame and eye, two material passes into the slot's R32f depth
+    (capture res / K): block min/max, then fattening, edge holes (disparity jump between adjacent samples),
+    disparity noise + 1/8 px quantization (full-resolution focal), range, blocky holes. Presets DepthGT / ZEDlike /
+    MobileStereo / Sparse; lower depth rate = copy of the last depth (color/depth misalignment).
+  - `FTeleopLatencyModel` (S4, §4): Gilbert-Elliott + AR(1) log-normal jitter + loss + fixed stages; presets Ideal /
+    LAN / WiFi / Remote / Bad (+ 5 = Constant `teleop.LatencyMs`); jittered command channel. `teleop.LatencyTest`
+    prints p50/p95/p99/loss/histogram per preset.
+  - `ATeleopPresenter`: frame selection (newest with A_i <= now, jitter buffer max(A_i, C_i + recent p95), never
+    older than shown) and all methods: M0 and M1/M2 in `M_TeleopPresent` (post process), M3 = procedural grid mesh
+    (`M_TeleopDepthMesh`, WPO in the vertex shader, attached to the pawn's VROrigin = room frame), M4 = sphere +
+    mesh (mesh stencil 2 passes through the post process), GT = pawn moved to the station. M2 radius = median of
+    the shown frame's degraded depth in a central window (async GPU readback), smoothed 150 ms. Also HUD, blind test
+    (`FTeleopBlindTest`), CSV logs (`FTeleopLogger`, Saved/TeleopLogs/<session>/), `teleop.ScreenshotPair`.
+  - `ATeleopProps`: checkerboard (85 cm in front of the station, S5), 1 cm rods, sliding block, fan.
+  - `TeleopMath.h` (`FTeleopPinhole`, ray-sphere) mirrors `Shaders/Teleop/Camera.ush`; tests `Teleop.Math.*`
+    (`Automation RunTests Teleop.Math`).
+  - All tunables are `teleop.*` console variables in `TeleopCVars.cpp`; commands `teleop.Recenter`,
+    `teleop.LatencyTest`, `teleop.ScreenshotPair`, `teleop.Blind.Toggle / Rate <d> / Confirm`.
 - `Source/ReprojectionShaders`: loads at PostConfigInit and maps `Reprojection/Shaders` to the virtual
   path `/Reprojection`. Put HLSL there (`/Reprojection/Teleop/*.ush`) and `#include` it from material
   Custom nodes, so shader logic is plain text in git.
@@ -43,11 +57,19 @@ imperfect depth, and lets the operator switch presentation/compensation methods 
   Change materials there, not by hand in the material editor. **Never run it during PIE** (editor asset
   functions refuse in PIE, and create_asset then blocks the editor with an "Overwrite Existing Object" dialog).
 - `Content/Python/teleop_tests.py`: PIE test helpers (proxy-hand grab/lift/throw on a Template cube).
-- Controls (dev layout until HANDOFF §8 in S7): right A / left X / M = cycle method (M0 <-> GT), grips = grab,
-  left menu / R = recenter. Debug: `teleop.EyeTest` 0/1/2.
-- Shader conventions in `Shaders/Teleop/Present.ush`: per-pixel eye view dir from `ResolvedView.ClipToView`;
-  robot frames are already pre-exposed like the operator view (do not multiply by `PreExposure`; M0 == GT
-  brightness was measured).
+- Controls (HANDOFF §8, adapted so nothing collides with grabbing): A / X cycle M0>M1>M2>M3>M4>GT (blind: confirm);
+  B / Y latency preset; right stick X base latency -/+10 ms; right trigger jitter buffer; right stick Y blind rating;
+  left stick click depth preset; left stick Y / X sphere R -/+10 cm, baseline -/+5 mm; left menu blind test;
+  right stick click or R recenter; grips grab. Debug: `teleop.EyeTest` 0/1/2, `teleop.Debug.Head*` (desktop).
+- Shader conventions (`Shaders/Teleop/*.ush`): per-pixel eye dir from `ResolvedView.ClipToView` +
+  `ViewToTranslatedWorld`; eye position = `DFHackToFloat(ResolvedView.WorldCameraOrigin) - RoomSeat`; room -> remote via
+  MapX/Y/Z/T params; robot frames are already pre-exposed like the operator view (do not multiply by `PreExposure`;
+  M0 == GT brightness was measured). DXC: no `?:` on structs. After editing a `.ush` with the editor open, run
+  `recompileshaders changed` before rebuilding materials.
+- Interpretations of HANDOFF that are not obvious: disparity noise/quantization in full-resolution pixels (stereo
+  matching runs on the camera images); edge holes in depth pixels (so Sparse, K = 16, is very holey); M3 rubber
+  sheet = disparity jump > `teleop.M3.EdgeDispPx` at a 64 mm reference baseline (works with b = 0); a zero baseline
+  gives no stereo depth (all holes) except DepthGT.
 
 ## Verified so far (2026-11-03)
 
@@ -55,6 +77,17 @@ imperfect depth, and lets the operator switch presentation/compensation methods 
 - S1b (desktop PIE, GT): proxy hand grabs a Template cube via `TryGrab`, lifts it, throws it (~250 cm/s).
 - S2: frame age min = teleop.LatencyMs, p50 = L + ~half a camera period (50/100/200 ms tested); M0 == GT at
   zero latency/offset (luma ratio 1.006, mean |diff| 1.8/255); neck lag 40 ms vs head (L_cmd 10 + tau).
+- S3 (desktop PIE, camera at the eye, zero latency): M1 == GT with a centered head (mean |diff| 3.5/255); with the
+  neck Fixed and the head yawed 20 deg, M1 vs GT inside the camera FOV 5.0/255 (M0: 63.5); 0 px offset.
+- S4: `teleop.LatencyTest` p50/p95 (ms): Ideal 28.5/29.8, LAN 38.4/43.8, WiFi 53.6/89.4, Remote 93.7/190, Bad 281/365;
+  loss and bad-state share match the chain's stationary values; in-run capture.csv WiFi 53.1/90.0, loss 0.83%.
+  Jitter buffer (WiFi): age p50 ~62 -> ~80 ms, p95 - p50 spread ~15-45 -> ~10 ms.
+- S5: head translated 5 cm, checkerboard at d = 90.6 cm, M1 shift vs GT: R 50 / 90 / 100 / 1000 cm ->
+  -30 / 0 / +4 / +34 px, predicted t(1/d - 1/R) f = -28.7 / -0.2 / +3.3 / +32.1 px.
+- S6: DepthGT + zero latency + 5 cm translation: M3 at the GT position (0 px), only disocclusion holes; mean |diff|
+  vs GT: M1 14.3, M3 6.7, M4 4.8. ZEDlike / MobileStereo / Sparse show increasing holes and distortion.
+- S7: M2 radius 507 cm vs 508 expected (wall); M4 fills M3 holes from the sphere; blind test writes blind.csv;
+  screenshot pairs; capture.csv / display.csv per session.
 - Performance (Meta XR Simulator at 72 Hz, editor closed, `UnrealEditor.exe -game -vr`, OVRPlugin backend):
   plain Template 72.0 fps (GPU 4.6 ms); full rig with both robot cameras at 60 Hz 71.5 fps (min 69.5, GPU 5.1 ms);
   rig without cameras 72.0. The rig itself costs ~0.5 ms GPU per frame. The game thread mostly waits in WaitFrame.
@@ -96,10 +129,10 @@ while the editor is running with this project. Plugin source: github.com/remiphi
 - Mind reversed-Z and the uv y-flip. Every projection/unprojection path gets a round-trip unit test
   (error < 0.1 mm) before it is used in a material.
 - Time: `FPlatformTime::Seconds()` everywhere.
-- All tunables live in one `UTeleopSettings` DataAsset and are mirrored as console variables.
+- All tunables are `teleop.*` console variables (HANDOFF suggested a DataAsset; CVars were enough so far).
 - Per-eye selection in materials uses `ResolvedView.StereoPassIndex`. It works with Instanced Stereo **on**
-  (project default, ~5 fps faster than off) in both pixel and vertex stages; HANDOFF §7.1's "turn ISR off"
-  precaution is not needed on UE 5.7. Re-check with `teleop.EyeTest 1` / `2` after engine upgrades.
+  (project default; the fps difference to off was within run-to-run noise) in both pixel and vertex stages;
+  HANDOFF §7.1's "turn ISR off" precaution is not needed on UE 5.7. Re-check with `teleop.EyeTest 1` / `2`.
 
 ## Git
 

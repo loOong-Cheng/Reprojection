@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "GameFramework/Actor.h"
+#include "FrameRingBuffer.h"
 #include "TeleopTypes.h"
 #include "RobotHead.generated.h"
 
@@ -9,6 +10,7 @@ class ATeleopGameMode;
 class ATeleopOperatorPawn;
 class UFrameRingBuffer;
 class USceneCaptureComponent2D;
+class UTeleopDepthDegrader;
 
 /**
  * Robot head at the station in the remote world (HANDOFF §3).
@@ -102,8 +104,16 @@ private:
 	TWeakObjectPtr<ATeleopGameMode> GameMode;
 	TWeakObjectPtr<ATeleopOperatorPawn> Pawn;
 
+	void UpdateDepth(int32 Slot, FTeleopFrameMeta& Meta, double Now);
+
 	UPROPERTY(Transient)
 	TObjectPtr<UFrameRingBuffer> Buffer;
+
+	UPROPERTY(Transient)
+	TObjectPtr<UTeleopDepthDegrader> Degrader;
+
+	int32 LastDepthSlot = INDEX_NONE;
+	double LastDepthTime = 0.0;
 
 	// Neck state, relative to Base.
 	FRotator NeckRotation = FRotator::ZeroRotator;
