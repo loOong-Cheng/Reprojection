@@ -32,6 +32,8 @@ Saved/
 *.xcworkspace/
 
 # --- Tool caches -----------------------------------------------
+__pycache__/
+*.pyc
 # Search index built by the mcp-unreal lookup_docs tool
 index.bleve/
 

@@ -1,0 +1,10 @@
+// Teleop eye helpers. Included from material Custom nodes as "/Reprojection/Teleop/EyeTest.ush".
+#pragma once
+
+// 0 = left eye (or mono), 1 = right eye.
+// Valid in both vertex and pixel stages only with Instanced Stereo OFF (vr.InstancedStereo=False):
+// each eye is then its own view with its own View uniform buffer.
+float Teleop_EyeIndex()
+{
+	return (float)ResolvedView.StereoPassIndex;
+}

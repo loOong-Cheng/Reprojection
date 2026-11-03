@@ -11,6 +11,6 @@ public class ReprojectionTarget : TargetRules
 		DefaultBuildSettings = BuildSettingsVersion.V6;
 		IncludeOrderVersion = EngineIncludeOrderVersion.Unreal5_7;
 
-		ExtraModuleNames.AddRange( new string[] { "Reprojection" } );
+		ExtraModuleNames.AddRange( new string[] { "Reprojection", "ReprojectionShaders" } );
 	}
 }

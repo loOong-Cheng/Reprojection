@@ -3,4 +3,6 @@
 #include "Reprojection.h"
 #include "Modules/ModuleManager.h"
 
+DEFINE_LOG_CATEGORY(LogTeleop);
+
 IMPLEMENT_PRIMARY_GAME_MODULE( FDefaultGameModuleImpl, Reprojection, "Reprojection" );

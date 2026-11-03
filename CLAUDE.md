@@ -17,6 +17,32 @@ imperfect depth, and lets the operator switch presentation/compensation methods 
   ```
   With the editor open, use Live Coding instead (Ctrl+Alt+F11, or the MCP `live_compile` endpoint).
 
+## Code map
+
+- `Source/Reprojection`: game module. `ATeleopGameMode` (project default game mode) spawns
+  `ATeleopOperatorPawn` (HMD + controllers, no locomotion) in `ATeleopOperatorRoom` (closed dark box,
+  spawned at (-100000, 0, 0) if the level has none).
+- `Source/ReprojectionShaders`: loads at PostConfigInit and maps `Reprojection/Shaders` to the virtual
+  path `/Reprojection`. Put HLSL there (`/Reprojection/Teleop/*.ush`) and `#include` it from material
+  Custom nodes, so shader logic is plain text in git.
+- `Content/Python/teleop_materials.py`: builds the materials in `/Game/Teleop/Materials` from code.
+  Rebuild with `import importlib, teleop_materials; importlib.reload(teleop_materials); teleop_materials.build_all()`.
+  Change materials there, not by hand in the material editor.
+- Debug: `teleop.EyeTest` 0 off / 1 post-process red-green (pixel stage) / 2 vertex-shader panel; right
+  controller A or keyboard T cycles it.
+
+## XR runtime: Quest 3 or Meta XR Simulator
+
+- Plugins: Epic `OpenXR` + Meta XR `OculusXR` 1.201.0 (installed in the engine, `Engine\Plugins\Marketplace\MetaXR`,
+  not in the repo). Backend `XrApi=NativeOpenXR` (Meta's recommended; the i105 project uses legacy `OVRPluginOpenXR`).
+- Meta XR Simulator v205 is installed at `C:\Program Files\MetaXRSimulator\v205.0`. A process uses it when the env var
+  `XR_RUNTIME_JSON` points at `meta_openxr_simulator.json` there (this is all the Meta toolbar toggle does, plus a
+  restart). To test in the simulator, launch the editor or game from a shell with that variable set; launching
+  normally uses the real runtime (Meta Horizon Link) again.
+- Headless check without a headset: run the game standalone, `UnrealEditor.exe <uproject> /Game/VRTemplate/VRTemplateMap
+  -game -vr -windowed -ExecCmds="teleop.EyeTest 1, vr.SpectatorScreenMode 2"` with `XR_RUNTIME_JSON` set. Spectator
+  mode 2 shows both eyes side by side in the game window. `-emulatestereo` (no runtime) also works for quick checks.
+
 ## Driving the editor (MCP)
 
 `.mcp.json` starts `%USERPROFILE%\go\bin\mcp-unreal.exe`, which talks to the editor plugin
