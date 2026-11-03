@@ -19,17 +19,44 @@ imperfect depth, and lets the operator switch presentation/compensation methods 
 
 ## Code map
 
-- `Source/Reprojection`: game module. `ATeleopGameMode` (project default game mode) spawns
-  `ATeleopOperatorPawn` (HMD + controllers, no locomotion) in `ATeleopOperatorRoom` (closed dark box,
-  spawned at (-100000, 0, 0) if the level has none).
+- `Source/Reprojection`: game module.
+  - `ATeleopGameMode` (project default): session coordinator. Spawns `ATeleopOperatorPawn` in
+    `ATeleopOperatorRoom` (closed dark box at (-100000, 0, 0)), and at the robot station (60, 0, 0) in the
+    Template (40 cm in front of the desk) `ARobotHead`, two `ARemoteHand` and `ATeleopPresenter`. Owns
+    `T_map` (remote = local * Calibration * Station; recenter keeps floor height 1:1) and `FTeleopLatencyModel`.
+  - `ATeleopOperatorPawn`: records HMD/controller poses (tracking frame) into `FTeleopPoseHistory`; GT moves
+    the whole pawn onto the station; world-locked HUD text with custom stencil 1.
+  - `ARemoteHand` (S1b): follows controller(t - L_cmd); delayed grab/release call the Template's
+    `BP_GrabComponent.TryGrab(MotionController)` / `TryRelease()`; adds the hand velocity on release (throw).
+  - `ARobotHead` (S2): neck (Fixed / Rot2DoF / Rot3DoF / Full6DoF, tau 40 ms, 300 deg/s, 2000 deg/s^2),
+    camera mount 10 cm fwd / 5 cm up, baseline b, stereo `SceneCapture2D` at f_cam into `UFrameRingBuffer`
+    (24 slots x 2 eyes, RGBA16f: RGB scene color, A depth cm).
+  - `ATeleopPresenter`: newest frame with A_i <= now (never older than shown), feeds `M_TeleopPresent`;
+    frame-age stats logged as `[stats]` every second and shown on the HUD.
+  - All tunables: `teleop.*` console variables in `TeleopCVars.cpp` (Method, LatencyMs, CmdLatencyMs, CamHz,
+    BaselineMm, CamMountOffset, NeckMode, EyeTest, Debug.HeadYaw*), plus `teleop.Recenter`.
 - `Source/ReprojectionShaders`: loads at PostConfigInit and maps `Reprojection/Shaders` to the virtual
   path `/Reprojection`. Put HLSL there (`/Reprojection/Teleop/*.ush`) and `#include` it from material
   Custom nodes, so shader logic is plain text in git.
 - `Content/Python/teleop_materials.py`: builds the materials in `/Game/Teleop/Materials` from code.
   Rebuild with `import importlib, teleop_materials; importlib.reload(teleop_materials); teleop_materials.build_all()`.
-  Change materials there, not by hand in the material editor.
-- Debug: `teleop.EyeTest` 0 off / 1 post-process red-green (pixel stage) / 2 vertex-shader panel; right
-  controller A or keyboard T cycles it.
+  Change materials there, not by hand in the material editor. **Never run it during PIE** (editor asset
+  functions refuse in PIE, and create_asset then blocks the editor with an "Overwrite Existing Object" dialog).
+- `Content/Python/teleop_tests.py`: PIE test helpers (proxy-hand grab/lift/throw on a Template cube).
+- Controls (dev layout until HANDOFF §8 in S7): right A / left X / M = cycle method (M0 <-> GT), grips = grab,
+  left menu / R = recenter. Debug: `teleop.EyeTest` 0/1/2.
+- Shader conventions in `Shaders/Teleop/Present.ush`: per-pixel eye view dir from `ResolvedView.ClipToView`;
+  robot frames are already pre-exposed like the operator view (do not multiply by `PreExposure`; M0 == GT
+  brightness was measured).
+
+## Verified so far (2026-11-03)
+
+- S1: per-eye red/green (pixel + vertex stage) in `-emulatestereo` and Meta XR Simulator; room fully closed.
+- S1b (desktop PIE, GT): proxy hand grabs a Template cube via `TryGrab`, lifts it, throws it (~250 cm/s).
+- S2: frame age min = teleop.LatencyMs, p50 = L + ~half a camera period (50/100/200 ms tested); M0 == GT at
+  zero latency/offset (luma ratio 1.006, mean |diff| 1.8/255); neck lag 40 ms vs head (L_cmd 10 + tau).
+- Performance (Meta XR Simulator, editor closed): ~65-72 fps without robot captures, ~45-50 fps with both
+  1280x960 captures at 60 Hz (cameras then reach ~40 Hz, one capture per rendered frame at most).
 
 ## XR runtime: Quest 3 or Meta XR Simulator
 

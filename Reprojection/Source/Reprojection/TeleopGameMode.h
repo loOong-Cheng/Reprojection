@@ -2,14 +2,21 @@
 
 #include "CoreMinimal.h"
 #include "GameFramework/GameModeBase.h"
+#include "TeleopLatencyModel.h"
 #include "TeleopGameMode.generated.h"
 
+class ARemoteHand;
+class ARobotHead;
+class ATeleopOperatorPawn;
 class ATeleopOperatorRoom;
+class ATeleopPresenter;
 
 /**
- * Spawns the operator (ATeleopOperatorPawn) in the dark operator room instead of at the Template's
- * PlayerStart. The Template map stays the remote world; if it has no operator room placed, one is
- * spawned at OperatorRoomLocation.
+ * Session coordinator. The Template map stays the remote world; this game mode:
+ *  - spawns the operator (ATeleopOperatorPawn) in the dark room (spawning the room if the level has none),
+ *  - spawns the robot side at the robot station: ARobotHead, two ARemoteHand, and the ATeleopPresenter,
+ *  - owns the operator->remote mapping T_map = T_calib * T_station (remote = local * T_map) and recentering,
+ *  - owns the latency model.
  */
 UCLASS()
 class REPROJECTION_API ATeleopGameMode : public AGameModeBase
@@ -20,14 +27,60 @@ public:
 	ATeleopGameMode();
 
 	virtual AActor* FindPlayerStart_Implementation(AController* Player, const FString& IncomingName) override;
+	virtual void RestartPlayer(AController* NewPlayer) override;
+	virtual void Tick(float DeltaSeconds) override;
+
+	/** Maps the operator's current head (yaw, and floor position) onto the robot station. Keeps floor height (1:1). */
+	UFUNCTION(BlueprintCallable, Category = "Teleop")
+	void Recenter();
+
+	/** Operator tracking frame -> remote world (remote = local * T_map). */
+	FTransform GetLocalToRemote() const { return Calibration * GetStationTransform(); }
+
+	FTransform GetStationTransform() const { return FTransform(FRotator(0.f, RobotStationYaw, 0.f), RobotStationLocation); }
+
+	/** Operator eye height at calibration, cm above the floor; the robot's neutral camera height. */
+	float GetCalibratedEyeHeight() const { return CalibratedEyeHeight; }
+
+	void HandleGrabInput(bool bLeft, bool bPressed);
+
+	FTeleopLatencyModel& GetLatencyModel() { return LatencyModel; }
+
+	UFUNCTION(BlueprintPure, Category = "Teleop")
+	ARobotHead* GetRobotHead() const { return RobotHead; }
+
+	UFUNCTION(BlueprintPure, Category = "Teleop")
+	ATeleopPresenter* GetPresenter() const { return Presenter; }
+
+	UFUNCTION(BlueprintPure, Category = "Teleop")
+	ARemoteHand* GetRemoteHand(bool bLeft) const { return bLeft ? LeftHand : RightHand; }
 
 	/** Where the operator room is spawned when the level has none, cm (about 1 km from the Template scene). */
 	UPROPERTY(EditDefaultsOnly, Category = "Teleop")
 	FVector OperatorRoomLocation = FVector(-100000.f, 0.f, 0.f);
 
+	/** Robot station on the Template floor: the seated operator's head maps above it, facing RobotStationYaw.
+	 *  Default: 40 cm in front of the Template desk's near edge (x = 100). */
+	UPROPERTY(EditDefaultsOnly, Category = "Teleop")
+	FVector RobotStationLocation = FVector(60.f, 0.f, 0.f);
+
+	UPROPERTY(EditDefaultsOnly, Category = "Teleop")
+	float RobotStationYaw = 0.f;
+
 private:
 	ATeleopOperatorRoom* FindOrSpawnOperatorRoom();
+	void SetupSession(ATeleopOperatorPawn* Pawn);
 
-	UPROPERTY(Transient)
-	TObjectPtr<ATeleopOperatorRoom> OperatorRoom;
+	UPROPERTY(Transient) TObjectPtr<ATeleopOperatorRoom> OperatorRoom;
+	UPROPERTY(Transient) TObjectPtr<ATeleopOperatorPawn> OperatorPawn;
+	UPROPERTY(Transient) TObjectPtr<ARobotHead> RobotHead;
+	UPROPERTY(Transient) TObjectPtr<ARemoteHand> LeftHand;
+	UPROPERTY(Transient) TObjectPtr<ARemoteHand> RightHand;
+	UPROPERTY(Transient) TObjectPtr<ATeleopPresenter> Presenter;
+
+	FTeleopLatencyModel LatencyModel;
+
+	FTransform Calibration = FTransform::Identity;
+	float CalibratedEyeHeight = 120.f;
+	bool bCalibrated = false;
 };
