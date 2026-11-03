@@ -54,6 +54,11 @@ namespace TeleopCVars
 		TEXT("Desktop only: frequency of the synthetic head yaw, Hz."),
 		ECVF_Default);
 
+	TAutoConsoleVariable<float> DebugQuitAfterSec(
+		TEXT("teleop.Debug.QuitAfterSec"), 0.f,
+		TEXT("Test automation: exit the process cleanly this many seconds after startup (flushes logs and traces). 0 = off."),
+		ECVF_Default);
+
 	TAutoConsoleVariable<float> DebugProfileGPUAfterSec(
 		TEXT("teleop.Debug.ProfileGPUAfterSec"), 0.f,
 		TEXT("If > 0: run ProfileGPU once, this many seconds after the session starts (dumps per-pass GPU timings to the log)."),

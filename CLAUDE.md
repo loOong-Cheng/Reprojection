@@ -55,15 +55,20 @@ imperfect depth, and lets the operator switch presentation/compensation methods 
 - S1b (desktop PIE, GT): proxy hand grabs a Template cube via `TryGrab`, lifts it, throws it (~250 cm/s).
 - S2: frame age min = teleop.LatencyMs, p50 = L + ~half a camera period (50/100/200 ms tested); M0 == GT at
   zero latency/offset (luma ratio 1.006, mean |diff| 1.8/255); neck lag 40 ms vs head (L_cmd 10 + tau).
-- Performance (Meta XR Simulator, editor closed, `UnrealEditor.exe -game`): CPU-bound, GPU only ~3.8 ms/frame.
-  ISR off + cameras 60 Hz: ~63 fps; ISR on + cameras 60 Hz: ~68 fps; ISR off, no cameras: ~70 fps (sim at 72 Hz).
-  The `[stats]` log line includes fps and game/render/rhi/gpu ms. Measure with the editor closed and after shaders
-  finished compiling (an earlier ~45 fps reading was polluted by background shader compilation).
+- Performance (Meta XR Simulator at 72 Hz, editor closed, `UnrealEditor.exe -game -vr`, OVRPlugin backend):
+  plain Template 72.0 fps (GPU 4.6 ms); full rig with both robot cameras at 60 Hz 71.5 fps (min 69.5, GPU 5.1 ms);
+  rig without cameras 72.0. The rig itself costs ~0.5 ms GPU per frame. The game thread mostly waits in WaitFrame.
+- How to measure: `teleop.Debug.QuitAfterSec N` exits cleanly; the module logs `[fps]` every 2 s (any game mode);
+  the presenter logs `[stats]` (frame age + fps). Run-to-run spread on the simulator is +-3 fps; if a run hangs at
+  frame 0, restart `MetaXRSimulator.exe`. Plain Template baseline:
+  `/Game/VRTemplate/VRTemplateMap?game=/Game/XRFramework/Blueprints/BP_XRGameMode.BP_XRGameMode_C`.
 
 ## XR runtime: Quest 3 or Meta XR Simulator
 
 - Plugins: Epic `OpenXR` + Meta XR `OculusXR` 1.201.0 (installed in the engine, `Engine\Plugins\Marketplace\MetaXR`,
-  not in the repo). Backend `XrApi=NativeOpenXR` (Meta's recommended; the i105 project uses legacy `OVRPluginOpenXR`).
+  not in the repo). Backend `XrApi=OVRPluginOpenXR`, like the i105 project. Do not switch to `NativeOpenXR`: on this
+  PC it ran ~10% slower (61-66 fps vs 72 on the simulator) and later hung at startup with
+  "Failed to get an OpenXR graphics binding".
 - Meta XR Simulator v205 is installed at `C:\Program Files\MetaXRSimulator\v205.0`. A process uses it when the env var
   `XR_RUNTIME_JSON` points at `meta_openxr_simulator.json` there (this is all the Meta toolbar toggle does, plus a
   restart). To test in the simulator, launch the editor or game from a shell with that variable set; launching

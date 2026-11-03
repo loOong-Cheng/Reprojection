@@ -29,4 +29,7 @@ namespace TeleopCVars
 
 	// Performance: run ProfileGPU once, this many seconds after the session starts (per-pass GPU timings in the log).
 	extern TAutoConsoleVariable<float> DebugProfileGPUAfterSec;
+
+	// Test automation: exit the process cleanly this many seconds after startup (0 = off).
+	extern TAutoConsoleVariable<float> DebugQuitAfterSec;
 }
