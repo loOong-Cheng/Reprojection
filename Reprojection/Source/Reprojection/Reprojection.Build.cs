@@ -15,6 +15,8 @@ public class Reprojection : ModuleRules
 			"EnhancedInput",
 			"HeadMountedDisplay", // UMotionControllerComponent, EHMDTrackingOrigin
 			"XRBase",             // UHeadMountedDisplayFunctionLibrary
+			"RenderCore",         // GGameThreadTime / GRenderThreadTime / GRHIThreadTime (perf stats)
+			"RHI",                // RHIGetGPUFrameCycles
 		});
 	}
 }

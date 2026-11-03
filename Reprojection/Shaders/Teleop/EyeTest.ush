@@ -2,8 +2,8 @@
 #pragma once
 
 // 0 = left eye (or mono), 1 = right eye.
-// Valid in both vertex and pixel stages only with Instanced Stereo OFF (vr.InstancedStereo=False):
-// each eye is then its own view with its own View uniform buffer.
+// Valid in both vertex and pixel stages with Instanced Stereo on or off: ResolvedView is resolved per eye
+// (verified on UE 5.7 with teleop.EyeTest 1/2, -emulatestereo and the Meta XR Simulator).
 float Teleop_EyeIndex()
 {
 	return (float)ResolvedView.StereoPassIndex;

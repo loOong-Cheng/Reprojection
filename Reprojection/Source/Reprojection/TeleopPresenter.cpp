@@ -7,8 +7,11 @@
 #include "TeleopGameMode.h"
 #include "TeleopOperatorPawn.h"
 
+#include "DynamicRHI.h"
+#include "Engine/Engine.h"
 #include "Engine/TextureRenderTarget2D.h"
 #include "Materials/MaterialInstanceDynamic.h"
+#include "RenderTimer.h"
 
 namespace
 {
@@ -146,6 +149,26 @@ void ATeleopPresenter::Tick(float DeltaSeconds)
 	{
 		WindowAgesMs.Add(CurrentAgeMs);
 	}
+
+	// Thread / GPU frame times (the values `stat unit` shows; one frame behind).
+	WindowGameMs.Add(FPlatformTime::ToMilliseconds(GGameThreadTime));
+	WindowRenderMs.Add(FPlatformTime::ToMilliseconds(GRenderThreadTime));
+	WindowRhiMs.Add(FPlatformTime::ToMilliseconds(GRHIThreadTime));
+	WindowGpuMs.Add(FPlatformTime::ToMilliseconds(RHIGetGPUFrameCycles(0)));
+	++WindowTicks;
+
+	if (SessionStart <= 0.0)
+	{
+		SessionStart = Now;
+	}
+	const float ProfileAfter = TeleopCVars::DebugProfileGPUAfterSec.GetValueOnGameThread();
+	if (!bProfiledGPU && ProfileAfter > 0.f && Now - SessionStart >= ProfileAfter && GEngine)
+	{
+		bProfiledGPU = true;
+		UE_LOG(LogTeleop, Log, TEXT("Running ProfileGPU (teleop.Debug.ProfileGPUAfterSec=%.1f)"), ProfileAfter);
+		GEngine->Exec(GetWorld(), TEXT("ProfileGPU"));
+	}
+
 	UpdateStats(Now);
 }
 
@@ -177,11 +200,16 @@ void ATeleopPresenter::UpdateStats(double Now)
 	const float CamHz = RobotHead.IsValid() ? RobotHead->GetMeasuredCamHz() : 0.f;
 	const int32 Neck = TeleopCVars::NeckMode.GetValueOnGameThread();
 
-	if (ActiveMethod != ETeleopMethod::GT)
-	{
-		UE_LOG(LogTeleop, Log, TEXT("[stats] method=%s latency=%.0fms age p50=%.1f p95=%.1f min=%.1f max=%.1f ms shown=%.1f fps cam=%.1f Hz n=%d"),
-			MethodName(ActiveMethod), LatencyMs, Stats.AgeP50Ms, Stats.AgeP95Ms, Stats.AgeMinMs, Stats.AgeMaxMs, Stats.ShownFps, CamHz, Stats.Samples);
-	}
+	auto Median = [](TArray<float>& V) { V.Sort(); return V.Num() ? V[V.Num() / 2] : 0.f; };
+	const float Fps = WindowTicks / float(Now - WindowStart);
+	UE_LOG(LogTeleop, Log, TEXT("[stats] method=%s latency=%.0fms age p50=%.1f p95=%.1f min=%.1f max=%.1f ms shown=%.1f fps cam=%.1f Hz | fps=%.1f game=%.2f render=%.2f rhi=%.2f gpu=%.2f ms"),
+		MethodName(ActiveMethod), LatencyMs, Stats.AgeP50Ms, Stats.AgeP95Ms, Stats.AgeMinMs, Stats.AgeMaxMs, Stats.ShownFps, CamHz,
+		Fps, Median(WindowGameMs), Median(WindowRenderMs), Median(WindowRhiMs), Median(WindowGpuMs));
+	WindowGameMs.Reset();
+	WindowRenderMs.Reset();
+	WindowRhiMs.Reset();
+	WindowGpuMs.Reset();
+	WindowTicks = 0;
 
 	if (ATeleopOperatorPawn* P = Pawn.Get())
 	{

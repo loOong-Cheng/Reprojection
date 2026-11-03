@@ -85,4 +85,10 @@ private:
 	int32 WindowNewFrames = 0;
 	double WindowStart = 0.0;
 	FTeleopDisplayStats LastStats;
+
+	// Per-frame thread / GPU times (ms), like `stat unit`, for the stats line.
+	TArray<float> WindowGameMs, WindowRenderMs, WindowRhiMs, WindowGpuMs;
+	int32 WindowTicks = 0;
+	double SessionStart = 0.0;
+	bool bProfiledGPU = false;
 };

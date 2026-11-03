@@ -26,4 +26,7 @@ namespace TeleopCVars
 	// Desktop test helpers (only when no HMD is active).
 	extern TAutoConsoleVariable<float> DebugHeadYawAmpDeg;
 	extern TAutoConsoleVariable<float> DebugHeadYawHz;
+
+	// Performance: run ProfileGPU once, this many seconds after the session starts (per-pass GPU timings in the log).
+	extern TAutoConsoleVariable<float> DebugProfileGPUAfterSec;
 }

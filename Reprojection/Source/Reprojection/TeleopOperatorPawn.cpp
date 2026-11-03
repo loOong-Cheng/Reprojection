@@ -75,6 +75,9 @@ ATeleopOperatorPawn::ATeleopOperatorPawn()
 	EyeTestPanel->SetCollisionEnabled(ECollisionEnabled::NoCollision);
 	EyeTestPanel->SetCastShadow(false);
 	EyeTestPanel->SetVisibility(false);
+	// Overlay like the HUD, so the vertex-stage test is visible through the presentation post process.
+	EyeTestPanel->SetRenderCustomDepth(true);
+	EyeTestPanel->SetCustomDepthStencilValue(HudStencilValue);
 	static ConstructorHelpers::FObjectFinder<UStaticMesh> PlaneMesh(TEXT("/Engine/BasicShapes/Plane.Plane"));
 	if (PlaneMesh.Succeeded())
 	{

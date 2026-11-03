@@ -55,8 +55,10 @@ imperfect depth, and lets the operator switch presentation/compensation methods 
 - S1b (desktop PIE, GT): proxy hand grabs a Template cube via `TryGrab`, lifts it, throws it (~250 cm/s).
 - S2: frame age min = teleop.LatencyMs, p50 = L + ~half a camera period (50/100/200 ms tested); M0 == GT at
   zero latency/offset (luma ratio 1.006, mean |diff| 1.8/255); neck lag 40 ms vs head (L_cmd 10 + tau).
-- Performance (Meta XR Simulator, editor closed): ~65-72 fps without robot captures, ~45-50 fps with both
-  1280x960 captures at 60 Hz (cameras then reach ~40 Hz, one capture per rendered frame at most).
+- Performance (Meta XR Simulator, editor closed, `UnrealEditor.exe -game`): CPU-bound, GPU only ~3.8 ms/frame.
+  ISR off + cameras 60 Hz: ~63 fps; ISR on + cameras 60 Hz: ~68 fps; ISR off, no cameras: ~70 fps (sim at 72 Hz).
+  The `[stats]` log line includes fps and game/render/rhi/gpu ms. Measure with the editor closed and after shaders
+  finished compiling (an earlier ~45 fps reading was polluted by background shader compilation).
 
 ## XR runtime: Quest 3 or Meta XR Simulator
 
@@ -90,7 +92,9 @@ while the editor is running with this project. Plugin source: github.com/remiphi
   (error < 0.1 mm) before it is used in a material.
 - Time: `FPlatformTime::Seconds()` everywhere.
 - All tunables live in one `UTeleopSettings` DataAsset and are mirrored as console variables.
-- Per-eye selection in materials uses `ResolvedView.StereoPassIndex`, which needs Instanced Stereo **off**.
+- Per-eye selection in materials uses `ResolvedView.StereoPassIndex`. It works with Instanced Stereo **on**
+  (project default, ~5 fps faster than off) in both pixel and vertex stages; HANDOFF §7.1's "turn ISR off"
+  precaution is not needed on UE 5.7. Re-check with `teleop.EyeTest 1` / `2` after engine upgrades.
 
 ## Git
 
