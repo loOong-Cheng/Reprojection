@@ -1,4 +1,4 @@
-#include "TeleopMemory.h"
+﻿#include "TeleopMemory.h"
 
 #include "FrameRingBuffer.h"
 #include "Reprojection.h"
@@ -13,11 +13,11 @@
 
 namespace
 {
-	FLinearColor Vec(const FVector& V) { return FLinearColor(float(V.X), float(V.Y), float(V.Z), 0.f); }
+	FLinearColor MemVec(const FVector& V) { return FLinearColor(float(V.X), float(V.Y), float(V.Z), 0.f); }
 
-	constexpr double MinInsertIntervalSec = 0.1;
+	constexpr double MemMinInsertIntervalSec = 0.1;
 
-	UTextureRenderTarget2D* MakeTarget(UObject* Outer, ETextureRenderTargetFormat Format, int32 W, int32 H, TextureFilter Filter)
+	UTextureRenderTarget2D* MemMakeTarget(UObject* Outer, ETextureRenderTargetFormat Format, int32 W, int32 H, TextureFilter Filter)
 	{
 		UTextureRenderTarget2D* RT = NewObject<UTextureRenderTarget2D>(Outer);
 		RT->RenderTargetFormat = Format;
@@ -31,7 +31,7 @@ namespace
 		return RT;
 	}
 
-	UMaterialInstanceDynamic* MakeMID(const TCHAR* Path, UObject* Outer)
+	UMaterialInstanceDynamic* MemMakeMID(const TCHAR* Path, UObject* Outer)
 	{
 		UMaterialInterface* Base = LoadObject<UMaterialInterface>(nullptr, Path);
 		if (!Base)
@@ -42,12 +42,12 @@ namespace
 		return UMaterialInstanceDynamic::Create(Base, Outer);
 	}
 
-	void SetCamera(UMaterialInstanceDynamic* MID, const TCHAR* Prefix, const FTransform& T)
+	void MemSetCamera(UMaterialInstanceDynamic* MID, const TCHAR* Prefix, const FTransform& T)
 	{
-		MID->SetVectorParameterValue(*FString::Printf(TEXT("%sPos"), Prefix), Vec(T.GetLocation()));
-		MID->SetVectorParameterValue(*FString::Printf(TEXT("%sFwd"), Prefix), Vec(T.GetUnitAxis(EAxis::X)));
-		MID->SetVectorParameterValue(*FString::Printf(TEXT("%sRight"), Prefix), Vec(T.GetUnitAxis(EAxis::Y)));
-		MID->SetVectorParameterValue(*FString::Printf(TEXT("%sUp"), Prefix), Vec(T.GetUnitAxis(EAxis::Z)));
+		MID->SetVectorParameterValue(*FString::Printf(TEXT("%sPos"), Prefix), MemVec(T.GetLocation()));
+		MID->SetVectorParameterValue(*FString::Printf(TEXT("%sFwd"), Prefix), MemVec(T.GetUnitAxis(EAxis::X)));
+		MID->SetVectorParameterValue(*FString::Printf(TEXT("%sRight"), Prefix), MemVec(T.GetUnitAxis(EAxis::Y)));
+		MID->SetVectorParameterValue(*FString::Printf(TEXT("%sUp"), Prefix), MemVec(T.GetUnitAxis(EAxis::Z)));
 	}
 }
 
@@ -56,10 +56,10 @@ void UTeleopMemory::Initialize(UObject* InWorldContext, USceneComponent* InAttac
 	WorldContext = InWorldContext;
 	AttachTo = InAttachTo;
 	StencilValue = InStencilValue;
-	ColorMID = MakeMID(TEXT("/Game/Teleop/Materials/M_TeleopKeyframeColor.M_TeleopKeyframeColor"), this);
-	EdgeMID = MakeMID(TEXT("/Game/Teleop/Materials/M_TeleopKeyframeEdge.M_TeleopKeyframeEdge"), this);
-	MaxFilterMID = MakeMID(TEXT("/Game/Teleop/Materials/M_TeleopMaxFilter.M_TeleopMaxFilter"), this);
-	DepthMID = MakeMID(TEXT("/Game/Teleop/Materials/M_TeleopKeyframeDepth.M_TeleopKeyframeDepth"), this);
+	ColorMID = MemMakeMID(TEXT("/Game/Teleop/Materials/M_TeleopKeyframeColor.M_TeleopKeyframeColor"), this);
+	EdgeMID = MemMakeMID(TEXT("/Game/Teleop/Materials/M_TeleopKeyframeEdge.M_TeleopKeyframeEdge"), this);
+	MaxFilterMID = MemMakeMID(TEXT("/Game/Teleop/Materials/M_TeleopMaxFilter.M_TeleopMaxFilter"), this);
+	DepthMID = MemMakeMID(TEXT("/Game/Teleop/Materials/M_TeleopKeyframeDepth.M_TeleopKeyframeDepth"), this);
 	MeshMaterial = LoadObject<UMaterialInterface>(nullptr, TEXT("/Game/Teleop/Materials/M_TeleopMemoryMesh.M_TeleopMemoryMesh"));
 	if (!MeshMaterial)
 	{
@@ -111,11 +111,11 @@ void UTeleopMemory::EnsureTargets(int32 Width, int32 Height, int32 Count)
 	Depths.Reset();
 	for (int32 i = 0; i < Count; ++i)
 	{
-		Colors.Add(MakeTarget(this, RTF_RGBA16f, Width, Height, TF_Bilinear));
-		Depths.Add(MakeTarget(this, RTF_R32f, Width, Height, TF_Nearest)); // never blend fore- and background depth
+		Colors.Add(MemMakeTarget(this, RTF_RGBA16f, Width, Height, TF_Bilinear));
+		Depths.Add(MemMakeTarget(this, RTF_R32f, Width, Height, TF_Nearest)); // never blend fore- and background depth
 	}
-	Scratch[0] = MakeTarget(this, RTF_R32f, Width, Height, TF_Nearest);
-	Scratch[1] = MakeTarget(this, RTF_R32f, Width, Height, TF_Nearest);
+	Scratch[0] = MemMakeTarget(this, RTF_R32f, Width, Height, TF_Nearest);
+	Scratch[1] = MemMakeTarget(this, RTF_R32f, Width, Height, TF_Nearest);
 	Keys.Init(FKeyframe(), Count);
 	LastInsertTime = -1.0;
 	MeshGrid = FIntPoint::ZeroValue; // mesh count may change too
@@ -183,7 +183,7 @@ void UTeleopMemory::EnsureMeshes(int32 GridX, int32 GridY)
 		M->SetRenderCustomDepth(true);
 		M->SetCustomDepthStencilValue(StencilValue);
 		M->SetHiddenInSceneCapture(true);
-		M->SetBoundsScale(200.f); // WPO moves vertices far from the rest grid (HANDOFF §7.6)
+		M->SetBoundsScale(200.f); // WPO moves vertices far from the rest grid (HANDOFF Â§7.6)
 		M->SetVisibility(false);
 		M->SetupAttachment(Parent);
 		M->RegisterComponent();
@@ -294,7 +294,7 @@ void UTeleopMemory::Update(double Now, UFrameRingBuffer* Buffer, int32 ShownSlot
 	EnsureTargets(Buffer->GetDepthWidth(), Buffer->GetDepthHeight(), Count);
 
 	const FTeleopFrameMeta& Meta = Buffer->GetMeta(ShownSlot);
-	if (Meta.bDepthValid && Meta.FrameId != LastConsideredFrameId && Now - LastInsertTime >= MinInsertIntervalSec)
+	if (Meta.bDepthValid && Meta.FrameId != LastConsideredFrameId && Now - LastInsertTime >= MemMinInsertIntervalSec)
 	{
 		LastConsideredFrameId = Meta.FrameId;
 		FTransform Pose = Meta.EyeWorld[0];
@@ -345,20 +345,20 @@ void UTeleopMemory::Update(double Now, UFrameRingBuffer* Buffer, int32 ShownSlot
 		const FKeyframe& Key = Keys[i];
 		MID->SetTextureParameterValue(TEXT("KeyColor"), Colors[i]);
 		MID->SetTextureParameterValue(TEXT("KeyDepth"), Depths[i]);
-		SetCamera(MID, TEXT("Key"), Key.Pose);
+		MemSetCamera(MID, TEXT("Key"), Key.Pose);
 		MID->SetVectorParameterValue(TEXT("KeyTan"), FLinearColor(Key.Tan.X, Key.Tan.Y, 0.f, 0.f));
 		MID->SetTextureParameterValue(TEXT("CurDepth"), Buffer->GetDepthTexture(ShownSlot, 0));
-		SetCamera(MID, TEXT("Cur"), Meta.EyeWorld[0]);
+		MemSetCamera(MID, TEXT("Cur"), Meta.EyeWorld[0]);
 		MID->SetVectorParameterValue(TEXT("CurTan"), CurTan);
 		MID->SetVectorParameterValue(TEXT("GridStep"), FLinearColor(1.f / MeshGrid.X, 1.f / MeshGrid.Y, 0.f, 0.f));
 		MID->SetScalarParameterValue(TEXT("EdgeDispPx"), Params.EdgeDispPx);
 		MID->SetScalarParameterValue(TEXT("DispScale"), Params.DispScale);
 		MID->SetScalarParameterValue(TEXT("Push"), Push * (1.f + Rank));
-		MID->SetVectorParameterValue(TEXT("RoomSeat"), Vec(Params.RoomSeat));
-		MID->SetVectorParameterValue(TEXT("MapX"), Vec(Params.Map.TransformVectorNoScale(FVector::XAxisVector)));
-		MID->SetVectorParameterValue(TEXT("MapY"), Vec(Params.Map.TransformVectorNoScale(FVector::YAxisVector)));
-		MID->SetVectorParameterValue(TEXT("MapZ"), Vec(Params.Map.TransformVectorNoScale(FVector::ZAxisVector)));
-		MID->SetVectorParameterValue(TEXT("MapT"), Vec(Params.Map.GetLocation()));
+		MID->SetVectorParameterValue(TEXT("RoomSeat"), MemVec(Params.RoomSeat));
+		MID->SetVectorParameterValue(TEXT("MapX"), MemVec(Params.Map.TransformVectorNoScale(FVector::XAxisVector)));
+		MID->SetVectorParameterValue(TEXT("MapY"), MemVec(Params.Map.TransformVectorNoScale(FVector::YAxisVector)));
+		MID->SetVectorParameterValue(TEXT("MapZ"), MemVec(Params.Map.TransformVectorNoScale(FVector::ZAxisVector)));
+		MID->SetVectorParameterValue(TEXT("MapT"), MemVec(Params.Map.GetLocation()));
 		M->SetVisibility(true);
 	}
 	bShown = true;

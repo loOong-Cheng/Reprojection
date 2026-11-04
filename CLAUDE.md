@@ -59,11 +59,22 @@ imperfect depth, and lets the operator switch presentation/compensation methods 
   - `ATeleopPresenter`: frame selection (newest with A_i <= now, jitter buffer max(A_i, C_i + recent p95), never
     older than shown) and all methods: M0 and M1/M2 in `M_TeleopPresent` (post process), M3 = procedural grid mesh
     (`M_TeleopDepthMesh`, WPO in the vertex shader, attached to the pawn's VROrigin = room frame), M4 = sphere +
-    mesh (mesh stencil 2 passes through the post process), GT = pawn moved to the station. M2 radius: per shown frame
+    mesh (mesh stencil 2 passes through the post process) with the mesh's holes filled per `teleop.M4.Fill`: 0 sphere
+    (HANDOFF; default), 1 nearest background pixel (`Teleop_PresentBackgroundFill` in Present.ush: from the sphere's
+    sample, walk along the image direction of the eye - camera offset to the first clearly farther depth), 2 keyframe
+    memory (`UTeleopMemory`) and fill 1 for the rest. GT = pawn moved to the station. M2 radius: per shown frame
     the median of the degraded depth in a central window (async GPU readback); target = median of those over the last
     `teleop.M2.WindowSec` (2 s), then eased with `teleop.M2.SmoothSec` (150 ms). HANDOFF only has the 150 ms smoothing;
     the user found that followed every glance (2026-11-04). M4 uses the same R. Also HUD, blind test
     (`FTeleopBlindTest`), CSV logs (`FTeleopLogger`, Saved/TeleopLogs/<session>/), `teleop.ScreenshotPair`.
+  - `UTeleopMemory` (M4 fill 2, user design 2026-11-04; `Memory.ush`): up to `teleop.Memory.Keyframes` (16)
+    keyframes of shown frames (colour + degraded depth at depth resolution + left camera pose), taken when the camera
+    moved > `MinMoveCm` (3) or turned > `MinTurnDeg` (5) from every keyframe; oldest replaced. Depth is kept only on the
+    background side of depth discontinuities within `teleop.Memory.BandPx` (64; user idea: holes only open there):
+    3 render-target passes (edge texels, separable max filter, keep test). Each keyframe is a depth mesh in the room
+    frame with the M3 stencil, pushed back along the eye ray (`teleop.Memory.Push` x (1 + age rank)) so the current
+    mesh wins, and carved where the current frame sees past it. Textures stay dense, so the band saves drawn pixels,
+    not memory (16 keyframes at ZEDlike: 56 MB). `teleop.Memory.Clear`, `teleop.Memory.Stats` (texels kept, slow).
   - `ATeleopObserver`: third-person view of the remote world for the PC window (recording, debugging); the HMD is
     unchanged. In VR the spectator screen is split: observer left (`teleop.Observer.Split`), operator eye right
     (`teleop.Observer` 1 split / 2 observer only / 0 off, leaving `vr.SpectatorScreenMode` alone). Scene capture at
@@ -150,7 +161,7 @@ imperfect depth, and lets the operator switch presentation/compensation methods 
   head-locked. `Full6DoF` moves the robot cameras with the head (M0 then matches GT); `Rot2DoF` (default, HANDOFF §3)
   does not translate. M4 as specified (sphere fills M3's holes) shows ghost duplicates of foreground objects in
   disocclusion holes. The camera never saw the background there, so the sphere samples the occluder's colour at its
-  camera-view position. This is inherent to the sphere fill, not a coordinate bug.
+  camera-view position. This is inherent to the sphere fill, not a coordinate bug; `teleop.M4.Fill` 1 / 2 avoid it.
   Test helper: the focus click presses both triggers (left = neck mode), so start one mode early.
 - Waist3Neck2 and Template hands (2026-11-04). Desktop PIE, synthetic head offset, camera position in the station
   frame vs the analytic chain: 15 cm right -> waist roll 15.26 deg, camera +15.79 right / -2.11 down (predicted
@@ -184,6 +195,21 @@ imperfect depth, and lets the operator switch presentation/compensation methods 
   the wall (R 509 cm) through the doorway (1440 cm). `teleop.M2.WindowSec 2`: R holds 509 for 1.25 s, 660 at 1.5 s,
   1413 at 2 s; `WindowSec 0` (old behaviour): 616 at 0.2 s, 1326 at 0.5 s. Injected presses closer than a frame apart
   merge into one (space them ~0.5 s).
+- M4 hole fills (2026-11-04, desktop PIE, Ideal, Rot2DoF, head 15 cm right of the camera; memory from a scripted
+  Full6DoF scan 0..18 cm, 6 keyframes; metric: mean |luma diff| vs GT on the pixels where M3 differs from GT by > 40,
+  fan and moving green cube excluded):
+
+  | | M3 | fill 0 sphere | fill 1 nearest bg | fill 2 whole frames | fill 2 band 64 | fill 2 band 32 |
+  |---|---|---|---|---|---|---|
+  | DepthGT | 94.6 | 58.1 | 28.0 | 18.7 | 19.3 | 15.6 |
+  | ZEDlike | 90.2 | 47.2 | 33.4 | 22.1 | 21.8 | 22.0 |
+
+  Texels kept per keyframe: DepthGT 100 / 46 / 27 % (whole, 64, 32 px), ZEDlike 78 (valid depth) / 32 / 18 %. A narrow
+  band suffices because the keyframe taken nearest the eye sees the revealed area right next to the occluder's edge.
+  Known limits: a moving object inside a hole leaves stale memory (nothing current can carve it); the robot hands are
+  not masked out of memory yet; memory cannot help where the robot camera never was (fill 1 there). GPU cost of fill 2
+  was below the desktop noise (median 4.49 vs 4.37 ms, samples +-1.5 ms); not measured in VR yet. Test helpers:
+  scratch `scan_band.py` pattern (sequence on `unreal.register_slate_post_tick_callback`, non-blocking).
 - How to measure: `teleop.Debug.QuitAfterSec N` exits cleanly; the module logs `[fps]` every 2 s (any game mode);
   the presenter logs `[stats]` (frame age + fps). Run-to-run spread on the simulator is +-3 fps; if a run hangs at
   frame 0, restart `MetaXRSimulator.exe`. Make sure `synth_env_server.exe` is not running (see the XR runtime section). Plain Template baseline:

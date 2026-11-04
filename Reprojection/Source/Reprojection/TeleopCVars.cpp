@@ -63,9 +63,10 @@ namespace TeleopCVars
 		TEXT("teleop.Memory.MinTurnDeg"), 5.f, TEXT("M4 fill 2: see teleop.Memory.MinMoveCm, degrees."), ECVF_Default);
 
 	TAutoConsoleVariable<float> MemoryBandPx(
-		TEXT("teleop.Memory.BandPx"), 128.f,
-		TEXT("M4 fill 2: a keyframe keeps only depth on the background side of depth edges, within this many robot camera\n")
-		TEXT("pixels of a clearly nearer surface (where holes open; user idea 2026-11-04). 0 = keep the whole frame."),
+		TEXT("teleop.Memory.BandPx"), 64.f,
+		TEXT("M4 fill 2: a keyframe keeps only depth on the background side of depth discontinuities, within this many robot\n")
+		TEXT("camera pixels (where holes open; user idea 2026-11-04). 0 = keep the whole frame. Measured (ZEDlike, desktop):\n")
+		TEXT("32 / 64 px keep 18 / 32 % of the texels with the same hole error vs GT as whole frames."),
 		ECVF_Default);
 
 	TAutoConsoleVariable<int32> MemoryGridStride(
