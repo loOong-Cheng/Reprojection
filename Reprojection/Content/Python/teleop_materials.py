@@ -393,7 +393,11 @@ MEMORY_USH = "/Reprojection/Teleop/Memory.ush"
 
 KEY_COLOR_CODE = "return Texture2DSampleLevel(Src, SrcSampler, UV.xy, 0).rgb;"
 
-KEY_DEPTH_CODE = "return Teleop_KeyframeBandDepth(Depth, DepthSampler, UV.xy, Texel.xy, BandTexels, DispScale, EdgeDispPx).xxx;"
+KEY_EDGE_CODE = "return Teleop_KeyframeEdge(Depth, DepthSampler, UV.xy, Texel.xy, DispScale, EdgeDispPx).xxx;"
+
+MAX_FILTER_CODE = "return Teleop_MaxFilter(Src, SrcSampler, UV.xy, Texel.xy, Dir.xy, Radius).xxx;"
+
+KEY_DEPTH_CODE = "return Teleop_KeyframeBandDepth(Depth, DepthSampler, EdgeH, EdgeHSampler, UV.xy, Texel.xy, BandTexels, DispScale).xxx;"
 
 MEMORY_WPO_CODE = """
 float Valid;
@@ -408,8 +412,8 @@ MEMORY_COLOR_CODE = "return Texture2DSampleLevel(KeyColor, KeyColorSampler, UV.x
 
 def build_memory():
     """M4 hole fill 2 (keyframe memory, UTeleopMemory):
-    M_TeleopKeyframeColor / M_TeleopKeyframeDepth: render-target passes that store a shown frame as a keyframe (colour
-    at depth resolution; depth kept only on the background side of depth edges within BandTexels).
+    M_TeleopKeyframeColor / Edge / MaxFilter / Depth: render-target passes that store a shown frame as a keyframe
+    (colour at depth resolution; depth kept only on the background side of depth discontinuities, dilated by BandTexels).
     M_TeleopMemoryMesh: a keyframe as a depth mesh (like M3, one camera for both eyes), carved against the current
     frame's depth and pushed back along the eye ray so the current mesh wins."""
     mat, g = _render_target_material("M_TeleopKeyframeColor")
@@ -418,14 +422,34 @@ def build_memory():
     MEL.connect_material_property(c, "", unreal.MaterialProperty.MP_EMISSIVE_COLOR)
     _finish(mat)
 
+    mat, g = _render_target_material("M_TeleopKeyframeEdge")
+    g.texture("Depth")
+    g.vector("Texel", (1.0 / 640.0, 1.0 / 480.0, 0.0))
+    g.scalar("DispScale", 2867.0)
+    g.scalar("EdgeDispPx", 3.0)
+    c = g.custom(KEY_EDGE_CODE, unreal.CustomMaterialOutputType.CMOT_FLOAT3, MEMORY_USH,
+                 ["Depth", "UV", "Texel", "DispScale", "EdgeDispPx"], desc="KeyframeEdge")
+    MEL.connect_material_property(c, "", unreal.MaterialProperty.MP_EMISSIVE_COLOR)
+    _finish(mat)
+
+    mat, g = _render_target_material("M_TeleopMaxFilter")
+    g.texture("Src")
+    g.vector("Texel", (1.0 / 640.0, 1.0 / 480.0, 0.0))
+    g.vector("Dir", (1.0, 0.0, 0.0))
+    g.scalar("Radius", 64.0)
+    c = g.custom(MAX_FILTER_CODE, unreal.CustomMaterialOutputType.CMOT_FLOAT3, MEMORY_USH,
+                 ["Src", "UV", "Texel", "Dir", "Radius"], desc="MaxFilter")
+    MEL.connect_material_property(c, "", unreal.MaterialProperty.MP_EMISSIVE_COLOR)
+    _finish(mat)
+
     mat, g = _render_target_material("M_TeleopKeyframeDepth")
     g.texture("Depth")
+    g.texture("EdgeH")
     g.vector("Texel", (1.0 / 640.0, 1.0 / 480.0, 0.0))
     g.scalar("BandTexels", 64.0)
     g.scalar("DispScale", 2867.0)
-    g.scalar("EdgeDispPx", 3.0)
     c = g.custom(KEY_DEPTH_CODE, unreal.CustomMaterialOutputType.CMOT_FLOAT3, MEMORY_USH,
-                 ["Depth", "UV", "Texel", "BandTexels", "DispScale", "EdgeDispPx"], desc="KeyframeBandDepth")
+                 ["Depth", "EdgeH", "UV", "Texel", "BandTexels", "DispScale"], desc="KeyframeBandDepth")
     MEL.connect_material_property(c, "", unreal.MaterialProperty.MP_EMISSIVE_COLOR)
     _finish(mat)
 
@@ -549,8 +573,8 @@ def build_all():
 def report():
     """Print shader instruction counts (non-zero = compiled) for all Teleop materials."""
     for name in ("M_TeleopUnlitColor", "M_TeleopLitColor", "M_TeleopGhost", "M_TeleopTextUnlit", "M_EyeTest_PP", "M_EyeTest_Vertex", "M_TeleopPresent", "M_TeleopDepthMesh",
-                 "M_TeleopDepthMinMax", "M_TeleopDepthDegrade", "M_TeleopCopyR", "M_TeleopKeyframeColor", "M_TeleopKeyframeDepth",
-                 "M_TeleopMemoryMesh", "M_TeleopChecker"):
+                 "M_TeleopDepthMinMax", "M_TeleopDepthDegrade", "M_TeleopCopyR", "M_TeleopKeyframeColor", "M_TeleopKeyframeEdge",
+                 "M_TeleopMaxFilter", "M_TeleopKeyframeDepth", "M_TeleopMemoryMesh", "M_TeleopChecker"):
         m = EAL.load_asset(f"{FOLDER}/{name}")
         if not m:
             unreal.log_warning(f"[teleop_materials] missing {name}")

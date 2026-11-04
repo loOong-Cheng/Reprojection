@@ -5,49 +5,74 @@
 
 #include "/Reprojection/Teleop/Camera.ush"
 
-// Keyframe depth: the degraded depth, kept only on the background side of depth edges, i.e. texels with a clearly
-// nearer valid depth (disparity jump > EdgeDispPx at the reference scale DispScale = f * b) within BandTexels. Holes
-// in later views only open there, so the rest of the frame need not be stored or drawn (user idea, 2026-11-04).
-// BandTexels <= 0 keeps every valid texel. Search: 16 directions on rings of growing radius (dense near, sparse far),
-// so a thin occluder far away can be missed.
-float Teleop_KeyframeBandDepth(Texture2D Depth, SamplerState DS, float2 UV, float2 Texel, float BandTexels,
-	float DispScale, float EdgeDispPx)
+// Keyframe edge band (user idea, 2026-11-04): holes in later views only open on the background side of depth
+// discontinuities, so a keyframe keeps depth only there. Three render-target passes at depth resolution:
+//  1. Teleop_KeyframeEdge: background-side edge texels. A texel is one if, in one of the 4 directions, the first valid
+//     texel within 4 steps (ZEDlike leaves invalid rims at edges) is nearer by a disparity jump > EdgeDispPx (at the
+//     reference scale DispScale = f * b). Output: its own disparity, else 0. Smooth slopes (floor, side walls) change
+//     little between neighbours and are not edges.
+//  2. Teleop_MaxFilter horizontally, then 3. vertically inside Teleop_KeyframeBandDepth: the largest edge disparity
+//     within BandTexels (an exact square dilation, separable).
+//  3. A valid texel is kept if an edge is that close and it is not much nearer than that edge's background
+//     (disparity <= 1.25 x, i.e. depth >= 80 %); this drops the near objects' own surfaces. BandTexels <= 0 keeps all.
+float Teleop_KeyframeEdge(Texture2D Depth, SamplerState DS, float2 UV, float2 Texel, float DispScale, float EdgeDispPx)
 {
 	const float Z = Texture2DSampleLevel(Depth, DS, UV, 0).r;
 	if (Z <= 0.0)
 	{
 		return 0.0;
 	}
-	if (BandTexels <= 0.0)
-	{
-		return Z;
-	}
 	const float DispSelf = DispScale / Z;
-	const float Rings[13] = { 1, 2, 3, 4, 6, 9, 13, 19, 27, 38, 54, 76, 108 };
-	[loop] for (int r = 0; r < 13; ++r)
+	const float2 Dirs[4] = { float2(1, 0), float2(-1, 0), float2(0, 1), float2(0, -1) };
+	[unroll] for (int d = 0; d < 4; ++d)
 	{
-		const bool bLast = Rings[r] >= BandTexels || r == 12;
-		const float Radius = bLast ? BandTexels : Rings[r];
-		[loop] for (int d = 0; d < 16; ++d)
+		[unroll] for (int s = 1; s <= 4; ++s)
 		{
-			const float A = (d + 0.5 * (r & 1)) * (6.2831853 / 16.0);
-			const float2 UVn = UV + float2(cos(A), sin(A)) * Radius * Texel;
+			const float2 UVn = UV + Dirs[d] * s * Texel;
 			if (any(UVn < 0.0) || any(UVn > 1.0))
 			{
-				continue;
+				break;
 			}
 			const float Zn = Texture2DSampleLevel(Depth, DS, UVn, 0).r;
-			if (Zn > 0.0 && DispScale / Zn - DispSelf > EdgeDispPx)
+			if (Zn > 0.0)
 			{
-				return Z;
+				if (DispScale / Zn - DispSelf > EdgeDispPx)
+				{
+					return DispSelf;
+				}
+				break; // first valid texel in this direction decides
 			}
-		}
-		if (bLast)
-		{
-			break;
 		}
 	}
 	return 0.0;
+}
+
+// Max of Src over [-Radius, Radius] texels along Dir (one axis of the separable dilation).
+float Teleop_MaxFilter(Texture2D Src, SamplerState SS, float2 UV, float2 Texel, float2 Dir, float Radius)
+{
+	const int R = (int)min(Radius, 256.0);
+	float M = 0.0;
+	[loop] for (int i = -R; i <= R; ++i)
+	{
+		const float2 UVn = UV + Dir * i * Texel;
+		if (all(UVn >= 0.0) && all(UVn <= 1.0))
+		{
+			M = max(M, Texture2DSampleLevel(Src, SS, UVn, 0).r);
+		}
+	}
+	return M;
+}
+
+float Teleop_KeyframeBandDepth(Texture2D Depth, SamplerState DS, Texture2D EdgeH, SamplerState ES, float2 UV, float2 Texel,
+	float BandTexels, float DispScale)
+{
+	const float Z = Texture2DSampleLevel(Depth, DS, UV, 0).r;
+	if (Z <= 0.0 || BandTexels <= 0.0)
+	{
+		return max(Z, 0.0);
+	}
+	const float EdgeDisp = Teleop_MaxFilter(EdgeH, ES, UV, Texel, float2(0, 1), BandTexels);
+	return (EdgeDisp > 0.0 && DispScale / Z <= EdgeDisp * 1.25) ? Z : 0.0;
 }
 
 // Vertex stage of a keyframe mesh. LocalPos: the vertex position in the mesh component's space (operator room, seat

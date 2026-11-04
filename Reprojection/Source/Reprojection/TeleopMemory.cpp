@@ -57,6 +57,8 @@ void UTeleopMemory::Initialize(UObject* InWorldContext, USceneComponent* InAttac
 	AttachTo = InAttachTo;
 	StencilValue = InStencilValue;
 	ColorMID = MakeMID(TEXT("/Game/Teleop/Materials/M_TeleopKeyframeColor.M_TeleopKeyframeColor"), this);
+	EdgeMID = MakeMID(TEXT("/Game/Teleop/Materials/M_TeleopKeyframeEdge.M_TeleopKeyframeEdge"), this);
+	MaxFilterMID = MakeMID(TEXT("/Game/Teleop/Materials/M_TeleopMaxFilter.M_TeleopMaxFilter"), this);
 	DepthMID = MakeMID(TEXT("/Game/Teleop/Materials/M_TeleopKeyframeDepth.M_TeleopKeyframeDepth"), this);
 	MeshMaterial = LoadObject<UMaterialInterface>(nullptr, TEXT("/Game/Teleop/Materials/M_TeleopMemoryMesh.M_TeleopMemoryMesh"));
 	if (!MeshMaterial)
@@ -112,6 +114,8 @@ void UTeleopMemory::EnsureTargets(int32 Width, int32 Height, int32 Count)
 		Colors.Add(MakeTarget(this, RTF_RGBA16f, Width, Height, TF_Bilinear));
 		Depths.Add(MakeTarget(this, RTF_R32f, Width, Height, TF_Nearest)); // never blend fore- and background depth
 	}
+	Scratch[0] = MakeTarget(this, RTF_R32f, Width, Height, TF_Nearest);
+	Scratch[1] = MakeTarget(this, RTF_R32f, Width, Height, TF_Nearest);
 	Keys.Init(FKeyframe(), Count);
 	LastInsertTime = -1.0;
 	MeshGrid = FIntPoint::ZeroValue; // mesh count may change too
@@ -217,7 +221,7 @@ bool UTeleopMemory::IsNovel(const FTransform& Pose) const
 void UTeleopMemory::Insert(UFrameRingBuffer* Buffer, int32 Slot, double Now, const FDrawParams& Params)
 {
 	UObject* Context = WorldContext.Get();
-	if (!Context || !ColorMID || !DepthMID)
+	if (!Context || !ColorMID || !EdgeMID || !MaxFilterMID || !DepthMID)
 	{
 		return;
 	}
@@ -240,14 +244,31 @@ void UTeleopMemory::Insert(UFrameRingBuffer* Buffer, int32 Slot, double Now, con
 	ColorMID->SetTextureParameterValue(TEXT("Src"), Buffer->GetTexture(Slot, 0));
 	UKismetRenderingLibrary::DrawMaterialToRenderTarget(Context, Colors[Index], ColorMID);
 
-	// Band radius in depth texels: the camera-pixel width over the depth subsampling K.
+	// Edge band: background-side discontinuity texels, dilated by the band radius (horizontal pass here, vertical in the
+	// final pass). Radius in depth texels = camera pixels / the depth subsampling K.
 	const float BandPx = FMath::Max(TeleopCVars::MemoryBandPx.GetValueOnGameThread(), 0.f);
 	const float K = float(Meta.Width) / float(FMath::Max(TargetSize.X, 1));
-	DepthMID->SetTextureParameterValue(TEXT("Depth"), Buffer->GetDepthTexture(Slot, 0));
-	DepthMID->SetVectorParameterValue(TEXT("Texel"), FLinearColor(1.f / TargetSize.X, 1.f / TargetSize.Y, 0.f, 0.f));
-	DepthMID->SetScalarParameterValue(TEXT("BandTexels"), BandPx / FMath::Max(K, 1.f));
+	const float BandTexels = BandPx / FMath::Max(K, 1.f);
+	const FLinearColor Texel(1.f / TargetSize.X, 1.f / TargetSize.Y, 0.f, 0.f);
+	UTextureRenderTarget2D* Depth = Buffer->GetDepthTexture(Slot, 0);
+	if (BandTexels > 0.f)
+	{
+		EdgeMID->SetTextureParameterValue(TEXT("Depth"), Depth);
+		EdgeMID->SetVectorParameterValue(TEXT("Texel"), Texel);
+		EdgeMID->SetScalarParameterValue(TEXT("DispScale"), Params.DispScale);
+		EdgeMID->SetScalarParameterValue(TEXT("EdgeDispPx"), Params.EdgeDispPx);
+		UKismetRenderingLibrary::DrawMaterialToRenderTarget(Context, Scratch[0], EdgeMID);
+		MaxFilterMID->SetTextureParameterValue(TEXT("Src"), Scratch[0]);
+		MaxFilterMID->SetVectorParameterValue(TEXT("Texel"), Texel);
+		MaxFilterMID->SetVectorParameterValue(TEXT("Dir"), FLinearColor(1.f, 0.f, 0.f, 0.f));
+		MaxFilterMID->SetScalarParameterValue(TEXT("Radius"), BandTexels);
+		UKismetRenderingLibrary::DrawMaterialToRenderTarget(Context, Scratch[1], MaxFilterMID);
+	}
+	DepthMID->SetTextureParameterValue(TEXT("Depth"), Depth);
+	DepthMID->SetTextureParameterValue(TEXT("EdgeH"), Scratch[1]);
+	DepthMID->SetVectorParameterValue(TEXT("Texel"), Texel);
+	DepthMID->SetScalarParameterValue(TEXT("BandTexels"), BandTexels);
 	DepthMID->SetScalarParameterValue(TEXT("DispScale"), Params.DispScale);
-	DepthMID->SetScalarParameterValue(TEXT("EdgeDispPx"), Params.EdgeDispPx);
 	UKismetRenderingLibrary::DrawMaterialToRenderTarget(Context, Depths[Index], DepthMID);
 
 	FKeyframe& Key = Keys[Index];

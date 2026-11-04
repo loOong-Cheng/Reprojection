@@ -73,7 +73,11 @@ private:
 	UPROPERTY(Transient) TArray<TObjectPtr<UProceduralMeshComponent>> Meshes;
 	UPROPERTY(Transient) TArray<TObjectPtr<UMaterialInstanceDynamic>> MeshMIDs;
 	UPROPERTY(Transient) TObjectPtr<UMaterialInstanceDynamic> ColorMID;
+	UPROPERTY(Transient) TObjectPtr<UMaterialInstanceDynamic> EdgeMID;
+	UPROPERTY(Transient) TObjectPtr<UMaterialInstanceDynamic> MaxFilterMID;
 	UPROPERTY(Transient) TObjectPtr<UMaterialInstanceDynamic> DepthMID;
+	/** Edge-band scratch: [0] background-side edge disparity, [1] its horizontal max. */
+	UPROPERTY(Transient) TObjectPtr<UTextureRenderTarget2D> Scratch[2];
 	UPROPERTY(Transient) TObjectPtr<UMaterialInterface> MeshMaterial;
 
 	TArray<FKeyframe> Keys;
