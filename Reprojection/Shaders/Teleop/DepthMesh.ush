@@ -6,17 +6,31 @@
 
 #include "/Reprojection/Teleop/Camera.ush"
 
+// Depth the mesh uses: the degraded depth, or (evaluation, teleop.Debug.MeshGTDepth) the capture's exact view z in the
+// frame's alpha, sky clamped to 300 m. The exact depth is ground truth, used only for the disocclusion mask.
+float Teleop_MeshDepth(float2 UV, Texture2D DepthL, SamplerState SL, Texture2D DepthR, SamplerState SR,
+	Texture2D ColorL, SamplerState CSL, Texture2D ColorR, SamplerState CSR, float DepthFromColor)
+{
+	if (DepthFromColor > 0.5)
+	{
+		const float A = Teleop_EyeIndex() < 0.5 ? Texture2DSampleLevel(ColorL, CSL, UV, 0).a : Texture2DSampleLevel(ColorR, CSR, UV, 0).a;
+		return A > 0.0 ? min(A, 30000.0) : 0.0;
+	}
+	return Teleop_SampleEyeDepth(DepthL, SL, DepthR, SR, UV);
+}
+
 // Vertex stage. LocalPos: the vertex position in the mesh component's space (= operator room, seat origin, no
 // rotation). Returns the world position offset; Valid = 1 if the vertex has depth and no discontinuity next to it.
 float3 Teleop_DepthMeshOffset(float2 UV, float3 LocalPos, float2 GridStep,
 	Texture2D DepthL, SamplerState SL, Texture2D DepthR, SamplerState SR,
+	Texture2D ColorL, SamplerState CSL, Texture2D ColorR, SamplerState CSR, float DepthFromColor,
 	float3 CamPosL, float3 CamFwdL, float3 CamRightL, float3 CamUpL,
 	float3 CamPosR, float3 CamFwdR, float3 CamRightR, float3 CamUpR,
 	float2 TanHalfFov, float EdgeDispPx, float DispScale, float3 MapX, float3 MapY, float3 MapZ, float3 MapT,
 	out float Valid)
 {
 	Valid = 0.0;
-	const float ZSampled = Teleop_SampleEyeDepth(DepthL, SL, DepthR, SR, UV);
+	const float ZSampled = Teleop_MeshDepth(UV, DepthL, SL, DepthR, SR, ColorL, CSL, ColorR, CSR, DepthFromColor);
 	// Invalid vertices stay on their camera ray (at 5 m) so the triangles that get discarded remain small on screen.
 	const bool bHasDepth = ZSampled > 0.0;
 	const float Z = bHasDepth ? ZSampled : 500.0;
@@ -28,7 +42,7 @@ float3 Teleop_DepthMeshOffset(float2 UV, float3 LocalPos, float2 GridStep,
 	const float2 Offsets[4] = { float2(GridStep.x, 0), float2(-GridStep.x, 0), float2(0, GridStep.y), float2(0, -GridStep.y) };
 	[unroll] for (int i = 0; i < 4; ++i)
 	{
-		const float N = Teleop_SampleEyeDepth(DepthL, SL, DepthR, SR, saturate(UV + Offsets[i]));
+		const float N = Teleop_MeshDepth(saturate(UV + Offsets[i]), DepthL, SL, DepthR, SR, ColorL, CSL, ColorR, CSR, DepthFromColor);
 		if (N > 0.0)
 		{
 			MaxJump = max(MaxJump, abs(DispScale / N - D));

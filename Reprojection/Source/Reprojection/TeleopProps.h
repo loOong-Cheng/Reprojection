@@ -57,4 +57,5 @@ private:
 
 	FVector SlideCenter = FVector(115.f, 0.f, 95.f);
 	double StartTime = 0.0;
+	double LastTickTime = 0.0; // teleop.Debug.Freeze holds the animation time
 };

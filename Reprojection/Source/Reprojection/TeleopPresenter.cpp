@@ -120,6 +120,24 @@ static FAutoConsoleCommandWithWorld GTeleopMemoryStats(TEXT("teleop.Memory.Stats
 		}
 	}));
 
+static FAutoConsoleCommandWithWorldAndArgs GTeleopEvalShot(TEXT("teleop.Eval.Shot"),
+	TEXT("teleop.Eval.Shot <file.png>: screenshot of the game viewport without UI to this path (evaluation)."),
+	FConsoleCommandWithWorldAndArgsDelegate::CreateLambda([](const TArray<FString>& Args, UWorld*)
+	{
+		if (Args.Num() > 0)
+		{
+			FScreenshotRequest::RequestScreenshot(Args[0], false, false);
+			UE_LOG(LogTeleop, Log, TEXT("[eval] shot %s"), *Args[0]);
+		}
+	}));
+
+static FAutoConsoleCommandWithWorldAndArgs GTeleopEvalState(TEXT("teleop.Eval.State"),
+	TEXT("teleop.Eval.State [tag]: log the eye - shown camera offset, frame age, sphere radii, keyframes and frame times ([eval])."),
+	FConsoleCommandWithWorldAndArgsDelegate::CreateLambda([](const TArray<FString>& Args, UWorld* W)
+	{
+		if (ATeleopPresenter* P = FindPresenter(W)) { P->LogEvalState(Args.Num() > 0 ? Args[0] : FString()); }
+	}));
+
 static FAutoConsoleCommandWithWorld GTeleopBlindToggle(TEXT("teleop.Blind.Toggle"),
 	TEXT("Start / stop the blind test (menu button)."),
 	FConsoleCommandWithWorldDelegate::CreateLambda([](UWorld* W) { if (ATeleopPresenter* P = FindPresenter(W)) { P->ToggleBlindTest(); } }));
@@ -300,8 +318,21 @@ void ATeleopPresenter::Tick(float DeltaSeconds)
 		P->SetRemoteView(true, GM->GetLocalToRemote()); // follow recentering
 	}
 
-	SelectFrame(Now);
-	UpdateAdaptiveRadius(Now, DeltaSeconds);
+	const bool bFrozen = TeleopCVars::DebugFreeze.GetValueOnGameThread() != 0;
+	if (bFrozen && FreezeStartTime <= 0.0)
+	{
+		FreezeStartTime = Now;
+	}
+	else if (!bFrozen)
+	{
+		FreezeStartTime = 0.0;
+	}
+	if (!bFrozen)
+	{
+		// Frozen (evaluation): keep the shown frame and M2's radius.
+		SelectFrame(Now);
+		UpdateAdaptiveRadius(Now, DeltaSeconds);
+	}
 	UpdateMaterialParams();
 
 	// Thread / GPU frame times (the values `stat unit` shows; one frame behind).
@@ -310,6 +341,14 @@ void ATeleopPresenter::Tick(float DeltaSeconds)
 	WindowRhiMs.Add(FPlatformTime::ToMilliseconds(GRHIThreadTime));
 	WindowGpuMs.Add(FPlatformTime::ToMilliseconds(RHIGetGPUFrameCycles(0)));
 	++WindowTicks;
+	if (RecentGpuMs.Num() >= EvalFrames)
+	{
+		RecentGpuMs.RemoveAt(0);
+		RecentFrameMs.RemoveAt(0);
+	}
+	RecentGpuMs.Add(FPlatformTime::ToMilliseconds(RHIGetGPUFrameCycles(0)));
+	RecentFrameMs.Add(LastTickTime > 0.0 ? float((Now - LastTickTime) * 1000.0) : 0.f);
+	LastTickTime = Now;
 
 	const float ProfileAfter = TeleopCVars::DebugProfileGPUAfterSec.GetValueOnGameThread();
 	if (!bProfiledGPU && ProfileAfter > 0.f && Now - SessionStart >= ProfileAfter && GEngine)
@@ -445,6 +484,7 @@ void ATeleopPresenter::UpdateMaterialParams()
 	{
 		EnsureDepthMesh(Buffer->GetDepthWidth(), Buffer->GetDepthHeight());
 		MeshMID->SetScalarParameterValue(TEXT("EdgeDispPx"), TeleopCVars::M3EdgeDispPx.GetValueOnGameThread());
+		MeshMID->SetScalarParameterValue(TEXT("DepthFromColor"), TeleopCVars::DebugMeshGTDepth.GetValueOnGameThread() != 0 ? 1.f : 0.f);
 		// Reference disparity scale f * b for the rubber-sheet test (64 mm reference baseline, so it also works with b = 0).
 		const float FocalPx = (Meta.Width * 0.5f) / FMath::Tan(FMath::DegreesToRadians(Meta.HorizontalFovDeg * 0.5f));
 		MeshMID->SetScalarParameterValue(TEXT("DispScale"), FocalPx * 6.4f);
@@ -465,6 +505,8 @@ void ATeleopPresenter::UpdateMaterialParams()
 		PresentMID->SetScalarParameterValue(TEXT("SearchPx"), TeleopCVars::FillSearchPx.GetValueOnGameThread());
 		PresentMID->SetScalarParameterValue(TEXT("EdgeDispPx"), TeleopCVars::M3EdgeDispPx.GetValueOnGameThread());
 		PresentMID->SetScalarParameterValue(TEXT("DispScale"), FocalPx * 6.4f);
+		const bool bMask = ActiveMethod == ETeleopMethod::M4_Hybrid && TeleopCVars::DebugMaskView.GetValueOnGameThread() != 0;
+		PresentMID->SetScalarParameterValue(TEXT("DebugMask"), bMask ? 1.f : 0.f);
 	}
 	if (Memory)
 	{
@@ -473,7 +515,8 @@ void ATeleopPresenter::UpdateMaterialParams()
 		Params.RoomSeat = RoomSeat;
 		Params.DispScale = FocalPx * 6.4f; // reference f * b of a 64 mm pair, as for the M3 rubber-sheet test
 		Params.EdgeDispPx = TeleopCVars::M3EdgeDispPx.GetValueOnGameThread();
-		Memory->Update(FPlatformTime::Seconds(), Buffer, ShownSlot, Fill == 2 && Meta.bDepthValid, Params);
+		const bool bMaskView = TeleopCVars::DebugMaskView.GetValueOnGameThread() != 0;
+		Memory->Update(FPlatformTime::Seconds(), Buffer, ShownSlot, Fill == 2 && Meta.bDepthValid && !bMaskView, Params);
 	}
 }
 
@@ -773,6 +816,43 @@ void ATeleopPresenter::AdjustRating(int32 Direction)
 
 // ---------------------------------------------------------------------------------------------------------------
 // Logging, stats, HUD
+
+void ATeleopPresenter::LogEvalState(const FString& Tag) const
+{
+	const ATeleopGameMode* GM = GameMode.Get();
+	const ATeleopOperatorPawn* P = Pawn.Get();
+	const UFrameRingBuffer* Buffer = RobotHead.IsValid() ? RobotHead->GetBuffer() : nullptr;
+	FTransform HeadLocal;
+	if (!GM || !P || !Buffer || ShownSlot == INDEX_NONE || !P->GetLatestLocalPose(ETeleopDevice::Head, HeadLocal))
+	{
+		UE_LOG(LogTeleop, Log, TEXT("[eval] tag=%s no state"), *Tag);
+		return;
+	}
+	const FTeleopFrameMeta& Meta = Buffer->GetMeta(ShownSlot);
+	// The left eye against the left camera (the frame a mono desktop view and the HMD's left eye use). Eye = head centre
+	// minus half the baseline (taken as the IPD) along the head's right axis.
+	const float HalfIpdCm = FMath::Clamp(TeleopCVars::BaselineMm.GetValueOnGameThread(), 0.f, 200.f) * 0.05f;
+	const FTransform HeadRemote = HeadLocal * GM->GetLocalToRemote();
+	const FTransform Eye(HeadRemote.GetRotation(), HeadRemote.TransformPositionNoScale(FVector(0.f, -HalfIpdCm, 0.f)));
+	const FTransform& Cam = Meta.EyeWorld[0];
+	const FVector Off = Cam.InverseTransformPositionNoScale(Eye.GetLocation()); // x fwd, y right, z up, cm
+	const FQuat Rel = Cam.GetRotation().Inverse() * Eye.GetRotation();
+	const FRotator RelRot = Rel.Rotator();
+	const float RelDeg = FMath::RadiansToDegrees(Rel.GetAngle());
+	const FVector EyeStation = GM->GetStationTransform().InverseTransformPosition(Eye.GetLocation());
+	const FRotator EyeRot = Eye.GetRotation().Rotator() - GM->GetStationTransform().Rotator();
+
+	auto Median = [](TArray<float> V) { V.Sort(); return V.Num() ? V[V.Num() / 2] : 0.f; };
+	const double Now = FPlatformTime::Seconds();
+	const double AgeRef = FreezeStartTime > 0.0 ? FreezeStartTime : Now;
+	UE_LOG(LogTeleop, Log, TEXT("[eval] tag=%s method=%s label=\"%s\" frozen=%d age_ms=%.1f offset_cm=%.2f,%.2f,%.2f offset_len_cm=%.2f rot_deg=%.2f rel_ypr=%.2f,%.2f,%.2f eye_station=%.1f,%.1f,%.1f eye_ypr=%.1f,%.1f R_fixed=%.0f R_adapt=%.1f keyframes=%d depth=%s latency=%s gpu_ms=%.2f frame_ms=%.2f frames=%d"),
+		*Tag, MethodShort(ActiveMethod), *MethodLabel(), FreezeStartTime > 0.0 ? 1 : 0, (AgeRef - ShownCaptureTime) * 1000.0,
+		Off.X, Off.Y, Off.Z, Off.Size(), RelDeg, RelRot.Yaw, RelRot.Pitch, RelRot.Roll,
+		EyeStation.X, EyeStation.Y, EyeStation.Z, EyeRot.Yaw, EyeRot.Pitch,
+		TeleopCVars::SphereRadiusCm.GetValueOnGameThread(), AdaptiveRadiusCm, Memory ? Memory->NumKeyframes() : 0,
+		UTeleopDepthDegrader::GetActivePreset().Name, *FTeleopLatencyModel::GetPresetName(TeleopCVars::LatencyPreset.GetValueOnGameThread()),
+		Median(RecentGpuMs), Median(RecentFrameMs), RecentGpuMs.Num());
+}
 
 FString ATeleopPresenter::MethodLabel() const
 {

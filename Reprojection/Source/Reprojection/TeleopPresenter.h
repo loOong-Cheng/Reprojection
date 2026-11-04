@@ -97,6 +97,10 @@ public:
 	/** M4 fill 2 keyframe memory (null before Init). */
 	UTeleopMemory* GetMemory() const { return Memory; }
 
+	/** Evaluation (teleop.Eval.State): one [eval] log line with the eye - shown camera offset, frame age, radii, keyframes,
+	 *  and the median GPU / frame time of the last frames. */
+	void LogEvalState(const FString& Tag) const;
+
 protected:
 	virtual void BeginPlay() override;
 
@@ -170,6 +174,12 @@ private:
 	int32 WindowTicks = 0;
 	FTeleopDisplayStats LastStats;
 	double SessionStart = 0.0;
+
+	// Evaluation: rolling frame times (last EvalFrames ticks) and the freeze start (teleop.Debug.Freeze).
+	static constexpr int32 EvalFrames = 90;
+	TArray<float> RecentGpuMs, RecentFrameMs;
+	double LastTickTime = 0.0;
+	double FreezeStartTime = 0.0;
 	bool bProfiledGPU = false;
 
 	FTeleopBlindTest BlindTest;

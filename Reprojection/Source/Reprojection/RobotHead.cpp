@@ -105,6 +105,10 @@ void ARobotHead::Tick(float DeltaSeconds)
 	Super::Tick(DeltaSeconds);
 
 	const double Now = FPlatformTime::Seconds();
+	if (TeleopCVars::DebugFreeze.GetValueOnGameThread() != 0)
+	{
+		return; // evaluation freeze: the robot and its cameras stand still (captures resync when it ends)
+	}
 	UpdateNeck(Now, DeltaSeconds);
 	UpdateCameraRig();
 

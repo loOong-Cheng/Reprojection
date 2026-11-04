@@ -294,7 +294,8 @@ void UTeleopMemory::Update(double Now, UFrameRingBuffer* Buffer, int32 ShownSlot
 	EnsureTargets(Buffer->GetDepthWidth(), Buffer->GetDepthHeight(), Count);
 
 	const FTeleopFrameMeta& Meta = Buffer->GetMeta(ShownSlot);
-	if (Meta.bDepthValid && Meta.FrameId != LastConsideredFrameId && Now - LastInsertTime >= MemMinInsertIntervalSec)
+	const bool bFrozen = TeleopCVars::DebugFreeze.GetValueOnGameThread() != 0;
+	if (!bFrozen && Meta.bDepthValid && Meta.FrameId != LastConsideredFrameId && Now - LastInsertTime >= MemMinInsertIntervalSec)
 	{
 		LastConsideredFrameId = Meta.FrameId;
 		FTransform Pose = Meta.EyeWorld[0];

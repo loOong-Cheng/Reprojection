@@ -183,12 +183,24 @@ CAM_INPUTS = ["CamPosL", "CamFwdL", "CamRightL", "CamUpL", "CamPosR", "CamFwdR",
 MAP_INPUTS = ["MapX", "MapY", "MapZ", "MapT"]
 
 PRESENT_CODE = f"""
+float2 ViewportUV = SvPositionToViewportUV(Parameters.SvPosition);
+if (DebugMask > 0.5)
+{{
+    // Evaluation class map (teleop.Debug.MaskView, M4): green = mesh, red = hole inside the shown frame, blue = outside.
+    if (abs(Stencil.r - {MESH_STENCIL}.0) < 0.5)
+    {{
+        return float3(0, 1, 0);
+    }}
+    FTeleopEyeCam ML; ML.Pos = CamPosL; ML.Fwd = CamFwdL; ML.Right = CamRightL; ML.Up = CamUpL;
+    FTeleopEyeCam MR; MR.Pos = CamPosR; MR.Fwd = CamFwdR; MR.Right = CamRightR; MR.Up = CamUpR;
+    const float MW = Teleop_SphereFrameWeight(ViewportUV, ML, MR, TanHalfFov.xy, SphereR, Feather, RoomSeat, MapX, MapY, MapZ, MapT);
+    return MW > 0.5 ? float3(1, 0, 0) : float3(0, 0, 1);
+}}
 // HUD (stencil {HUD_STENCIL}) and, in M4, the M3 depth mesh (stencil {MESH_STENCIL}) stay visible.
 if (abs(Stencil.r - {HUD_STENCIL}.0) < 0.5 || abs(Stencil.r - {MESH_STENCIL}.0) < 0.5)
 {{
     return SceneColor.rgb;
 }}
-float2 ViewportUV = SvPositionToViewportUV(Parameters.SvPosition);
 float3 C;
 if (Mode < 0.5)
 {{
@@ -219,6 +231,7 @@ return C * ExposureScale;
 MESH_WPO_CODE = """
 float Valid;
 float3 Offset = Teleop_DepthMeshOffset(UV.xy, LocalPos, GridStep.xy, DepthL, DepthLSampler, DepthR, DepthRSampler,
+    LeftTex, LeftTexSampler, RightTex, RightTexSampler, DepthFromColor,
     CamPosL, CamFwdL, CamRightL, CamUpL, CamPosR, CamFwdR, CamRightR, CamUpR, TanHalfFov.xy, EdgeDispPx, DispScale,
     MapX, MapY, MapZ, MapT, Valid);
 return float4(Offset, Valid);
@@ -331,6 +344,7 @@ def build_present():
     g.scalar("Mode", 0.0)
     g.scalar("SphereR", 100.0)
     g.scalar("Fill", 0.0)
+    g.scalar("DebugMask", 0.0)
     g.scalar("SearchPx", 128.0)
     g.scalar("EdgeDispPx", 3.0)
     g.scalar("DispScale", 2867.0)  # reference f * b (px * cm): 1280 px / 110 deg, 64 mm
@@ -339,7 +353,7 @@ def build_present():
     g.node("SceneColor", _scene_texture(mat, unreal.SceneTextureId.PPI_POST_PROCESS_INPUT0, -1400, 1400), "Color")
     g.node("Stencil", _scene_texture(mat, unreal.SceneTextureId.PPI_CUSTOM_STENCIL, -1400, 1550), "Color")
     inputs = ["LeftTex", "RightTex", "DepthL", "DepthR", "TanHalfFov", "Feather", "ExposureScale", "SceneColor", "Stencil", "Mode",
-              "SphereR", "Fill", "SearchPx", "EdgeDispPx", "DispScale", "FrameSize", "RoomSeat"] + CAM_INPUTS + MAP_INPUTS
+              "SphereR", "Fill", "DebugMask", "SearchPx", "EdgeDispPx", "DispScale", "FrameSize", "RoomSeat"] + CAM_INPUTS + MAP_INPUTS
     custom = g.custom(PRESENT_CODE, unreal.CustomMaterialOutputType.CMOT_FLOAT3, PRESENT_USH, inputs, desc="TeleopPresent")
     MEL.connect_material_property(custom, "", unreal.MaterialProperty.MP_EMISSIVE_COLOR)
     _finish(mat)
@@ -360,12 +374,13 @@ def build_depth_mesh():
     g.vector("GridStep", (1.0 / 640.0, 1.0 / 480.0, 0.0))
     g.scalar("EdgeDispPx", 3.0)
     g.scalar("DispScale", 2867.0)  # reference f * b (px * cm): 1280 px / 110 deg, 64 mm
+    g.scalar("DepthFromColor", 0.0)  # evaluation: exact depth from the frame alpha (teleop.Debug.MeshGTDepth)
     g.node("UV", _expr(mat, unreal.MaterialExpressionTextureCoordinate, -1400, 1400))
     local = _expr(mat, unreal.MaterialExpressionLocalPosition, -1400, 1500)
     local.set_editor_property("included_offsets", unreal.PositionIncludedOffsets.EXCLUDE_OFFSETS)
     g.node("LocalPos", local)
 
-    wpo_inputs = ["UV", "LocalPos", "GridStep", "DepthL", "DepthR"] + CAM_INPUTS + ["TanHalfFov", "EdgeDispPx", "DispScale"] + MAP_INPUTS
+    wpo_inputs = ["UV", "LocalPos", "GridStep", "DepthL", "DepthR", "LeftTex", "RightTex", "DepthFromColor"] + CAM_INPUTS + ["TanHalfFov", "EdgeDispPx", "DispScale"] + MAP_INPUTS
     wpo = g.custom(MESH_WPO_CODE, unreal.CustomMaterialOutputType.CMOT_FLOAT4, DEPTH_MESH_USH, wpo_inputs, x=-700, y=-300, desc="DepthMeshWPO")
     offset = _expr(mat, unreal.MaterialExpressionComponentMask, -400, -300)
     for c, v in (("r", True), ("g", True), ("b", True), ("a", False)):

@@ -103,6 +103,20 @@ imperfect depth, and lets the operator switch presentation/compensation methods 
   Change materials there, not by hand in the material editor. **Never run it during PIE** (editor asset
   functions refuse in PIE, and create_asset then blocks the editor with an "Overwrite Existing Object" dialog).
 - `Content/Python/teleop_tests.py`: PIE test helpers (proxy-hand grab/lift/throw on a Template cube).
+- Method evaluation (user request 2026-11-04: many realistic views, every method, several metrics, a screenshot each):
+  `Content/Python/teleop_eval.py` (12 scenes and the sequence; run in the editor during desktop PIE,
+  `teleop_eval.run(out_dir)`, non-blocking, ~36 s per scene), `Tools/eval_metrics.py` (metrics.csv / .json),
+  `Tools/eval_report.py` (HTML page + JPEGs). The metric tools need numpy, scipy, pillow and, for LPIPS, torch + lpips
+  (not in the repo; a scratch venv). Per scene: sway 3 s (robot, M2's R and the memory build up), settle, freeze, move the
+  eye by the scene's offset, then render every method and two class maps for the same frozen state. Hooks:
+  `teleop.Debug.Freeze` (props, robot neck/waist and cameras, the shown frame, M2's R and memory stand still; the head
+  still moves), `teleop.Debug.MaskView` (M4: green = mesh, red = hole in the frame, blue = outside it),
+  `teleop.Debug.MeshGTDepth` (mesh from the frame alpha, exact depth: ground truth for the disocclusion mask only),
+  `teleop.Debug.HideHud`, `teleop.Debug.HeadPitchDeg`, `teleop.Eval.State [tag]` (`[eval]` line: left eye vs left camera
+  offset, turn, frame age, R, keyframes, median GPU / frame ms of 90 frames), `teleop.Eval.Shot <png>`. The desktop head
+  must turn about a neck point (`teleop_eval._head`: eye = neck + R * (10, 0, 5) cm), not about the eye: turning about
+  the eye moves the implied neck, and Waist3Neck2 then leans and rolls its cameras (3-14 deg seen) to follow it.
+  Results: Saved/TeleopEval/2026-11-04/ (PNGs, metrics, editor log) and the "Verified" entry below.
 - Controls (HANDOFF §8, adapted so nothing collides with grabbing or the robot fingers): the session starts in GT and A
   cycles GT>M1>M2>M3>M4>M0 (user, 2026-11-04: starting head-locked in M0 was unpleasant; `teleop.Method` values are
   unchanged, 0 = M0 ... 5 = GT) (blind: confirm); B latency preset; X neck mode (Fixed > Rot2DoF > Rot3DoF > Full6DoF > Waist3+Neck2; keyboard N);
@@ -114,7 +128,10 @@ imperfect depth, and lets the operator switch presentation/compensation methods 
   mode 10 times in 11 s (the analog axis re-fires a bool action on every small release) and kept toggling the
   jitter buffer.
   PC keyboard V: observer camera preset; C: robot camera marker. Debug: `teleop.EyeTest` 0/1/2, `teleop.Debug.Head*`
-  (desktop), `teleop.Debug.HideRobotHands`, `teleop.Debug.ShowRobotCamera`.
+  (desktop), `teleop.Debug.HideRobotHands`, `teleop.Debug.ShowRobotCamera`. `teleop.Debug.DesktopEye` (default 1): the
+  desktop view renders from the left eye (head - b/2), because a mono view uses the left robot frame (eye index 0).
+  Before 2026-11-04 it rendered from the head centre, so with b = 64 mm every desktop test had the eye 3.2 cm right of
+  its camera (results recorded with a non-zero baseline before that date include this offset).
   Every control logs an `[input]` line and every resulting change a `[control]` line; a grab that finds nothing
   logs the nearest grabbable's offset; `teleop.Debug.LogHandsSec 0.5` logs remote hand positions and fingers
   (`[hand]`), the head pose (`[head]`) and the robot's waist / neck angles and camera position (`[robot]`).
@@ -195,7 +212,8 @@ imperfect depth, and lets the operator switch presentation/compensation methods 
   the wall (R 509 cm) through the doorway (1440 cm). `teleop.M2.WindowSec 2`: R holds 509 for 1.25 s, 660 at 1.5 s,
   1413 at 2 s; `WindowSec 0` (old behaviour): 616 at 0.2 s, 1326 at 0.5 s. Injected presses closer than a frame apart
   merge into one (space them ~0.5 s).
-- M4 hole fills (2026-11-04, desktop PIE, Ideal, Rot2DoF, head 15 cm right of the camera; memory from a scripted
+- M4 hole fills (2026-11-04, desktop PIE, Ideal, Rot2DoF, head 15 cm right of the camera, so the rendered eye was
+  18.2 cm from the left camera it used, see `teleop.Debug.DesktopEye`; superseded by the method evaluation below; memory from a scripted
   Full6DoF scan 0..18 cm, 6 keyframes; metric: mean |luma diff| vs GT on the pixels where M3 differs from GT by > 40,
   fan and moving green cube excluded):
 
@@ -210,6 +228,40 @@ imperfect depth, and lets the operator switch presentation/compensation methods 
   not masked out of memory yet; memory cannot help where the robot camera never was (fill 1 there). GPU cost of fill 2
   was below the desktop noise (median 4.49 vs 4.37 ms, samples +-1.5 ms); not measured in VR yet. Test helpers:
   scratch `scan_band.py` pattern (sequence on `unreal.register_slate_post_tick_callback`, non-blocking).
+- Method evaluation (2026-11-04; user: at least ten realistic, varied views, M1/M2 too, several metrics, a screenshot
+  each). Desktop PIE, left eye, WiFi latency (frozen frame 57-116 ms old), Waist3Neck2, 12 frozen scenes from
+  `teleop_eval.SCENES`: S01-S11 with eye-camera offsets of 4-20 cm and 0-15 deg (desk, rods, fan, sliding block, robot
+  hands, cube stack, far courtyard, head turn, standing up, leaning back, nod, near floor), S12 the control at zero
+  offset. Regions from the class maps: V seen with depth, D holes even with exact depth (disocclusions + the mesh's cut band
+  along depth edges, ~5% of the frame at zero offset), N holes only from degraded depth, O outside the frame. Mean over
+  S01-S11, ZEDlike (Err = mean |RGB diff| 0-255; shift = median block-matching misregistration in V; false edges = method
+  edges with no GT edge within 3 px, % of GT edges; GPU = desktop frozen, mono; VR = Meta XR Simulator, standalone, both
+  robot cameras capturing, OVRServer running, ceiling ~69-70 fps that day; full write-up with every table and the
+  screenshots: `docs/eval/2026-11-04-methods/README.md`):
+
+  | Method | PSNR dB ↑ | SSIM ↑ | LPIPS ↓ | Err V ↓ | Err D ↓ | Err N ↓ | Shift px ↓ | False edges % ↓ | GPU ms ↓ | VR fps | VR GPU ms |
+  |---|---|---|---|---|---|---|---|---|---|---|---|
+  | M0 | 15.0 | 0.661 | 0.434 | 26.4 | 53.1 | 23.3 | 44.9 | 60.5 | 1.45 | 69.1 | 3.94 |
+  | M1 (R 1 m) | 16.6 | 0.696 | 0.325 | 16.6 | 37.1 | 26.5 | 34.1 | 46.1 | 1.45 | 69.1 | 3.99 |
+  | M2 (adaptive R) | 18.0 | 0.744 | 0.256 | 15.6 | 40.5 | 22.0 | 25.1 | 31.3 | 1.45 | 70.0 | 4.03 |
+  | M3 | 20.3 | 0.857 | 0.264 | 2.7 | 73.8 | 50.4 | 0.6 | 19.0 | 1.82 | 69.5 | 6.78 |
+  | M4 fill 0 | 23.4 | 0.893 | 0.145 | 2.5 | 39.7 | 21.5 | 0.5 | 10.1 | 1.88 | 69.1 | 5.77 |
+  | M4 fill 1 | 23.7 | 0.890 | 0.153 | 2.5 | 34.5 | 22.8 | 0.5 | 11.6 | 1.88 | 69.0 | 5.96 |
+  | M4 fill 2 | 24.6 | 0.901 | 0.146 | 2.6 | 25.2 | 17.6 | 0.6 | 9.1 | 3.47 | 57.1 | 12.68 |
+  | M4 fill 0, R 1 m | 22.3 | 0.879 | 0.174 | 2.5 | 36.5 | 25.9 | 0.5 | 15.3 | 1.84 | 69.0 | 5.58 |
+  | M4 fill 1, R 1 m | 22.4 | 0.876 | 0.184 | 2.5 | 34.6 | 26.2 | 0.5 | 17.1 | 1.89 | 68.6 | 5.92 |
+  | M4 fill 2, R 1 m | 23.3 | 0.888 | 0.173 | 2.7 | 25.1 | 21.2 | 0.6 | 13.9 | 3.38 | 55.9 | 10.50 |
+
+  GT in VR: 68.6 fps / 4.8 ms. DepthGT run: M3 LPIPS 0.128, M4 fill 0 0.109, fill 2 0.100 (PSNR 25.5 vs 23.2, Err D 23
+  vs 40), fill 2 GPU 6.2 ms desktop (full-resolution keyframe meshes). Findings: M4 best on every image metric; with ZEDlike the
+  adaptive sphere beats R 1 m inside M4 in 7/11 scenes (it fills every no-depth pixel; S06 32.3 vs 23.2 dB), with exact
+  depth the spheres are even; M2 beats M1 in 9/11 (S06 shift 54 -> 5 px); memory has the lowest disocclusion error in
+  10/11 scenes but pastes stale robot hands (S04: LPIPS 0.141 vs 0.112 for the sphere fill), is the only presentation that
+  is worse than M0 at zero offset (S12: 24.6 vs 26.0 dB, stale fan), and with a full memory costs ~7 ms GPU in VR (57
+  fps); nearest background lowers Err D but its LPIPS is no better than the sphere's in 9/11 (streaks); PSNR and LPIPS
+  disagree on M3 vs M2 (holes vs registration), so no single metric ranks the methods. Not measured: anything temporal
+  (flicker, swimming, judder). Report artifact: https://claude.ai/artifact/13krAiNke12Xb6eKxjrnMF (private); data,
+  full-resolution PNGs and notes.json in Saved/TeleopEval/2026-11-04/.
 - How to measure: `teleop.Debug.QuitAfterSec N` exits cleanly; the module logs `[fps]` every 2 s (any game mode);
   the presenter logs `[stats]` (frame age + fps). Run-to-run spread on the simulator is +-3 fps; if a run hangs at
   frame 0, restart `MetaXRSimulator.exe`. Make sure `synth_env_server.exe` is not running (see the XR runtime section). Plain Template baseline:

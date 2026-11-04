@@ -80,6 +80,27 @@ float3 Teleop_PresentSphere(float2 ViewportUV, Texture2D LeftTex, SamplerState L
 	return Teleop_SampleEyeFrame(LeftTex, LeftSampler, RightTex, RightSampler, saturate(UV)).rgb * W;
 }
 
+// Evaluation (teleop.Debug.MaskView): weight of the sphere's sample, 1 inside the shown frame, 0 outside it.
+float Teleop_SphereFrameWeight(float2 ViewportUV, FTeleopEyeCam CamL, FTeleopEyeCam CamR, float2 TanHalfFov, float Radius,
+	float Feather, float3 RoomSeat, float3 MapX, float3 MapY, float3 MapZ, float3 MapT)
+{
+	FTeleopEyeCam Cam = CamR; // HLSL 2021: no ?: on structs
+	if (Teleop_EyeIndex() < 0.5)
+	{
+		Cam = CamL;
+	}
+	const float3 O = Teleop_RoomLocalToRemote(Teleop_EyeRoomLocal(RoomSeat), MapX, MapY, MapZ, MapT);
+	const float3 V = normalize(Teleop_RoomToRemoteDir(Teleop_PixelWorldDir(ViewportUV), MapX, MapY, MapZ));
+	const float S = Teleop_RaySphere(O, V, Cam.Pos, Radius);
+	if (S <= 0.0)
+	{
+		return 0.0;
+	}
+	float Z;
+	const float2 UV = Teleop_CamProject(O + S * V, Cam.Pos, Cam.Fwd, Cam.Right, Cam.Up, TanHalfFov, Z);
+	return Z > 0.0 ? Teleop_FrameWeight(UV, Feather) : 0.0;
+}
+
 // Walks from UV0 in steps of StepUV (at most NumSteps) and returns the first uv whose depth is farther than DispRef
 // by more than EdgeDispPx (disparity at the reference scale DispScale = f * b), i.e. background beyond an edge,
 // moved two more steps past the edge's mixed pixels. Returns UV0 if there is none.

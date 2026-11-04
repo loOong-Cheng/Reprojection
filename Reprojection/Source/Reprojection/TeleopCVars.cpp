@@ -182,6 +182,16 @@ namespace TeleopCVars
 	TAutoConsoleVariable<float> DebugHeadYawDeg(
 		TEXT("teleop.Debug.HeadYawDeg"), 0.f, TEXT("Desktop only: static head yaw added to the sweep, degrees."), ECVF_Default);
 
+	TAutoConsoleVariable<float> DebugHeadPitchDeg(
+		TEXT("teleop.Debug.HeadPitchDeg"), 0.f, TEXT("Desktop only: static head pitch, degrees (+ = up)."), ECVF_Default);
+
+	TAutoConsoleVariable<int32> DebugDesktopEye(
+		TEXT("teleop.Debug.DesktopEye"), 1,
+		TEXT("Desktop only: where the single desktop view renders from. 1 = the left eye (head - baseline/2 to the right), like an\n")
+		TEXT("HMD's left eye: a mono view uses the left robot frame (eye index 0), so rendering from the head centre put the eye\n")
+		TEXT("b/2 = 3.2 cm beside its camera in every desktop test (found 2026-11-04). 0 = the head centre (old behaviour)."),
+		ECVF_Default);
+
 	TAutoConsoleVariable<float> DebugHeadOffsetX(
 		TEXT("teleop.Debug.HeadOffsetX"), 0.f, TEXT("Desktop only: head translation in the tracking frame, X (forward), cm."), ECVF_Default);
 	TAutoConsoleVariable<float> DebugHeadOffsetY(
@@ -234,6 +244,30 @@ namespace TeleopCVars
 		TEXT("If > 0: every this many seconds, log the operator head pose ([head]), each remote hand's position, fingers and\n")
 		TEXT("the nearest grabbable within 1 m ([hand]; used to steer simulated controllers in tests), and the robot's waist,\n")
 		TEXT("neck and camera position ([robot]). 0 = off."),
+		ECVF_Default);
+
+	// --- Evaluation (teleop_eval.py) ------------------------------------------------------------------------
+
+	TAutoConsoleVariable<int32> DebugFreeze(
+		TEXT("teleop.Debug.Freeze"), 0,
+		TEXT("1 = freeze the remote side for image comparisons: the props stop, the robot neck / waist and its cameras stop, the\n")
+		TEXT("presenter keeps the shown frame, M2's radius and the keyframe memory stop updating. The operator's head still moves,\n")
+		TEXT("so every method (and GT) can be rendered for the same frozen world, frame and eye pose."),
+		ECVF_Default);
+
+	TAutoConsoleVariable<int32> DebugHideHud(
+		TEXT("teleop.Debug.HideHud"), 0, TEXT("1 = hide the operator HUD text (screenshots for metrics)."), ECVF_Default);
+
+	TAutoConsoleVariable<int32> DebugMaskView(
+		TEXT("teleop.Debug.MaskView"), 0,
+		TEXT("Evaluation, M4 only: 1 = show a class map instead of the image: green = the depth mesh covers the pixel, red = a hole\n")
+		TEXT("inside the shown frame, blue = outside the shown frame. With teleop.Debug.MeshGTDepth 1, red = disocclusion."),
+		ECVF_Default);
+
+	TAutoConsoleVariable<int32> DebugMeshGTDepth(
+		TEXT("teleop.Debug.MeshGTDepth"), 0,
+		TEXT("Evaluation: 1 = the M3 / M4 mesh uses the capture's exact depth (frame alpha) instead of the degraded depth. Ground\n")
+		TEXT("truth, for the disocclusion mask only (HANDOFF §6.1: methods may not use it)."),
 		ECVF_Default);
 
 	TAutoConsoleVariable<float> DebugQuitAfterSec(

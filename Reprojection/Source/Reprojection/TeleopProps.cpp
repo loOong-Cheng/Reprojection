@@ -1,5 +1,7 @@
 #include "TeleopProps.h"
 
+#include "TeleopCVars.h"
+
 #include "Components/StaticMeshComponent.h"
 #include "Engine/StaticMesh.h"
 #include "Materials/MaterialInstanceDynamic.h"
@@ -92,7 +94,13 @@ void ATeleopProps::BeginPlay()
 void ATeleopProps::Tick(float DeltaSeconds)
 {
 	Super::Tick(DeltaSeconds);
-	const double T = FPlatformTime::Seconds() - StartTime;
+	const double Now = FPlatformTime::Seconds();
+	if (TeleopCVars::DebugFreeze.GetValueOnGameThread() != 0 && LastTickTime > 0.0)
+	{
+		StartTime += Now - LastTickTime; // frozen: the animation time stands still
+	}
+	LastTickTime = Now;
+	const double T = Now - StartTime;
 	SlidingBlock->SetRelativeLocation(SlideCenter + FVector(0.f, SlideAmplitudeCm * FMath::Sin(2.0 * PI * T / SlidePeriodSec), 0.f));
 	FanHub->SetRelativeRotation(FRotator(0.f, 0.f, FMath::Fmod(FanDegPerSec * T, 360.0)));
 }

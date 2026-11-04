@@ -52,6 +52,8 @@ namespace TeleopCVars
 	extern TAutoConsoleVariable<float> DebugHeadYawAmpDeg;
 	extern TAutoConsoleVariable<float> DebugHeadYawHz;
 	extern TAutoConsoleVariable<float> DebugHeadYawDeg;
+	extern TAutoConsoleVariable<float> DebugHeadPitchDeg;
+	extern TAutoConsoleVariable<int32> DebugDesktopEye;
 	extern TAutoConsoleVariable<float> DebugHeadOffsetX;
 	extern TAutoConsoleVariable<float> DebugHeadOffsetY;
 	extern TAutoConsoleVariable<float> DebugHeadOffsetZ;
@@ -67,4 +69,10 @@ namespace TeleopCVars
 	extern TAutoConsoleVariable<float> ObserverSplit;
 	extern TAutoConsoleVariable<float> ObserverExposure;
 	extern TAutoConsoleVariable<float> DebugQuitAfterSec;
+
+	// Evaluation.
+	extern TAutoConsoleVariable<int32> DebugFreeze;
+	extern TAutoConsoleVariable<int32> DebugHideHud;
+	extern TAutoConsoleVariable<int32> DebugMaskView;
+	extern TAutoConsoleVariable<int32> DebugMeshGTDepth;
 }

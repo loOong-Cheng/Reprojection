@@ -1,0 +1,232 @@
+{
+ "scenes": [
+  {
+   "id": "S01",
+   "name": "desk front, lean right 10 cm",
+   "look": [
+    0.0,
+    -15.0
+   ],
+   "delta": [
+    0,
+    10,
+    0,
+    0,
+    0
+   ],
+   "hand_motion": 4.0,
+   "content": "checkerboard, fan (moving), ball, doorway, white box + rods, cubes"
+  },
+  {
+   "id": "S02",
+   "name": "rods and boxes, lean left-up",
+   "look": [
+    30.0,
+    -15.0
+   ],
+   "delta": [
+    0,
+    -8,
+    3,
+    0,
+    0
+   ],
+   "content": "1 cm rods (high depth gradient), white boxes, cubes, far wall"
+  },
+  {
+   "id": "S03",
+   "name": "fan and doorway, small lean + turn",
+   "look": [
+    -15.0,
+    -5.0
+   ],
+   "delta": [
+    0,
+    6,
+    0,
+    4,
+    0
+   ],
+   "content": "rotating fan blades (moving, thin), sliding block (moving), checkerboard, dark doorway (far)"
+  },
+  {
+   "id": "S04",
+   "name": "hands at the desk, lean in",
+   "look": [
+    0.0,
+    -40.0
+   ],
+   "delta": [
+    6,
+    0,
+    -5,
+    0,
+    0
+   ],
+   "hands": [
+    [
+     50.0,
+     -15.0,
+     92.0
+    ],
+    [
+     46.0,
+     18.0,
+     90.0
+    ]
+   ],
+   "hand_motion": 8.0,
+   "content": "robot hands (actuators, moving during the pre-motion), cubes, desk edge"
+  },
+  {
+   "id": "S05",
+   "name": "cube stack and ball, big lean right",
+   "look": [
+    -45.0,
+    -30.0
+   ],
+   "delta": [
+    0,
+    15,
+    0,
+    0,
+    0
+   ],
+   "hand_motion": 5.0,
+   "content": "purple cube stack, ball, hands, desk edge, floor"
+  },
+  {
+   "id": "S06",
+   "name": "far courtyard corner, lean right 20 cm",
+   "look": [
+    150.0,
+    0.0
+   ],
+   "delta": [
+    0,
+    20,
+    0,
+    0,
+    0
+   ],
+   "content": "far walls (4-10 m), blue cubes on the floor, sky"
+  },
+  {
+   "id": "S07",
+   "name": "head turn left 15 deg",
+   "look": [
+    -90.0,
+    -10.0
+   ],
+   "delta": [
+    0,
+    2,
+    0,
+    -15,
+    0
+   ],
+   "content": "side wall, cube stack edge, desk corner"
+  },
+  {
+   "id": "S08",
+   "name": "stand up 15 cm (waist cannot follow)",
+   "look": [
+    30.0,
+    -30.0
+   ],
+   "delta": [
+    0,
+    0,
+    15,
+    0,
+    -5
+   ],
+   "hand_motion": 4.0,
+   "content": "desk top: rods, white box, cubes, hands"
+  },
+  {
+   "id": "S09",
+   "name": "lean back 20 cm",
+   "look": [
+    0.0,
+    -25.0
+   ],
+   "delta": [
+    -20,
+    0,
+    0,
+    0,
+    0
+   ],
+   "hand_motion": 4.0,
+   "content": "whole desk: checkerboard, fan, ball, hands, rods"
+  },
+  {
+   "id": "S10",
+   "name": "fast diagonal nod",
+   "look": [
+    60.0,
+    -20.0
+   ],
+   "delta": [
+    0,
+    4,
+    0,
+    8,
+    -12
+   ],
+   "content": "white boxes, cubes, desk, wall corner"
+  },
+  {
+   "id": "S11",
+   "name": "near floor and desk side",
+   "look": [
+    -120.0,
+    -45.0
+   ],
+   "delta": [
+    0,
+    -10,
+    -5,
+    0,
+    0
+   ],
+   "content": "floor (near, slanted), desk side, wall"
+  },
+  {
+   "id": "S12",
+   "name": "control: eye at the camera",
+   "look": [
+    0.0,
+    0.0
+   ],
+   "delta": [
+    0,
+    0,
+    0,
+    0,
+    0
+   ],
+   "content": "desk front looking level (the camera is exactly at the eye only at pitch 0; pitched, the neck pivot puts it\n~3 cm off): all methods should match GT"
+  }
+ ],
+ "methods": [
+  "GT",
+  "M0",
+  "M1",
+  "M2",
+  "M3",
+  "M4f0s2",
+  "M4f1s2",
+  "M4f2s2",
+  "M4f0s1",
+  "M4f1s1",
+  "M4f2s1"
+ ],
+ "masks": [
+  "maskGT",
+  "maskDeg"
+ ],
+ "sway_sec": 3.0,
+ "settle_sec": 2.6
+}

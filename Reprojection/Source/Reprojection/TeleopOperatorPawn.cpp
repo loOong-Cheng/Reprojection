@@ -210,6 +210,12 @@ void ATeleopOperatorPawn::Tick(float DeltaSeconds)
 	}
 
 	UpdateRobotCameraMarker();
+
+	const bool bHud = TeleopCVars::DebugHideHud.GetValueOnGameThread() == 0;
+	if (HudText->IsVisible() != bHud)
+	{
+		HudText->SetVisibility(bHud);
+	}
 }
 
 void ATeleopOperatorPawn::UpdateRobotCameraMarker()
@@ -294,8 +300,11 @@ void ATeleopOperatorPawn::RecordPoses(double Now)
 		const float Yaw = TeleopCVars::DebugHeadYawDeg.GetValueOnGameThread() + (Amp != 0.f ? Amp * FMath::Sin(2.0 * PI * Hz * Now) : 0.f);
 		const FVector Offset(TeleopCVars::DebugHeadOffsetX.GetValueOnGameThread(), TeleopCVars::DebugHeadOffsetY.GetValueOnGameThread(),
 			TeleopCVars::DebugHeadOffsetZ.GetValueOnGameThread());
-		Head = FTransform(FRotator(0.f, Yaw, 0.f), FVector(0.f, 0.f, DesktopEyeHeight) + Offset);
-		Camera->SetRelativeLocationAndRotation(Head.GetLocation(), Head.GetRotation());
+		Head = FTransform(FRotator(TeleopCVars::DebugHeadPitchDeg.GetValueOnGameThread(), Yaw, 0.f), FVector(0.f, 0.f, DesktopEyeHeight) + Offset);
+		// The robot follows the head centre (recorded below); the view renders from the left eye (teleop.Debug.DesktopEye).
+		const float HalfIpdCm = TeleopCVars::DebugDesktopEye.GetValueOnGameThread() != 0
+			? FMath::Clamp(TeleopCVars::BaselineMm.GetValueOnGameThread(), 0.f, 200.f) * 0.05f : 0.f;
+		Camera->SetRelativeLocationAndRotation(Head.GetLocation() + Head.GetRotation().RotateVector(FVector(0.f, -HalfIpdCm, 0.f)), Head.GetRotation());
 		bHeadValid = true;
 		bHeadTracked = true;
 	}
