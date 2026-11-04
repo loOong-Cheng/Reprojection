@@ -1,0 +1,112 @@
+// M4 hole fill 2: memory of earlier robot frames (keyframes), drawn as depth meshes behind the current M3 mesh.
+// Uses only what a real system has: earlier frames, their degraded depth and their capture poses (HANDOFF §6.1).
+// Included from M_TeleopKeyframeDepth and M_TeleopMemoryMesh as "/Reprojection/Teleop/Memory.ush".
+#pragma once
+
+#include "/Reprojection/Teleop/Camera.ush"
+
+// Keyframe depth: the degraded depth, kept only on the background side of depth edges, i.e. texels with a clearly
+// nearer valid depth (disparity jump > EdgeDispPx at the reference scale DispScale = f * b) within BandTexels. Holes
+// in later views only open there, so the rest of the frame need not be stored or drawn (user idea, 2026-11-04).
+// BandTexels <= 0 keeps every valid texel. Search: 16 directions on rings of growing radius (dense near, sparse far),
+// so a thin occluder far away can be missed.
+float Teleop_KeyframeBandDepth(Texture2D Depth, SamplerState DS, float2 UV, float2 Texel, float BandTexels,
+	float DispScale, float EdgeDispPx)
+{
+	const float Z = Texture2DSampleLevel(Depth, DS, UV, 0).r;
+	if (Z <= 0.0)
+	{
+		return 0.0;
+	}
+	if (BandTexels <= 0.0)
+	{
+		return Z;
+	}
+	const float DispSelf = DispScale / Z;
+	const float Rings[13] = { 1, 2, 3, 4, 6, 9, 13, 19, 27, 38, 54, 76, 108 };
+	[loop] for (int r = 0; r < 13; ++r)
+	{
+		const bool bLast = Rings[r] >= BandTexels || r == 12;
+		const float Radius = bLast ? BandTexels : Rings[r];
+		[loop] for (int d = 0; d < 16; ++d)
+		{
+			const float A = (d + 0.5 * (r & 1)) * (6.2831853 / 16.0);
+			const float2 UVn = UV + float2(cos(A), sin(A)) * Radius * Texel;
+			if (any(UVn < 0.0) || any(UVn > 1.0))
+			{
+				continue;
+			}
+			const float Zn = Texture2DSampleLevel(Depth, DS, UVn, 0).r;
+			if (Zn > 0.0 && DispScale / Zn - DispSelf > EdgeDispPx)
+			{
+				return Z;
+			}
+		}
+		if (bLast)
+		{
+			break;
+		}
+	}
+	return 0.0;
+}
+
+// Vertex stage of a keyframe mesh. LocalPos: the vertex position in the mesh component's space (operator room, seat
+// origin). Returns the world position offset; Valid = 1 where the vertex has band depth, no depth jump next to it and
+// is not contradicted by the current frame.
+//  - Missing depth: the vertex sits at a valid neighbour's depth (keeps the masked triangles small); with no valid
+//    neighbour it collapses onto the keyframe camera, so triangles that are entirely outside the band have zero area
+//    and are not rasterized (the saving of the edge band).
+//  - Carving: if the current frame's camera sees past this point (its depth there is clearly farther), the point is
+//    stale (something moved) and is dropped. Points the current camera cannot see are kept: those fill the holes.
+//  - Push: the point moves away from the current eye along the eye's ray by the factor Push (no change on screen),
+//    so the current M3 mesh, at the true depth, wins the depth test wherever it exists; older keyframes get a larger
+//    Push, so the newest memory wins among keyframes.
+float3 Teleop_MemoryMeshOffset(float2 UV, float3 LocalPos, float2 GridStep, Texture2D KeyDepth, SamplerState KS,
+	float3 KeyPos, float3 KeyFwd, float3 KeyRight, float3 KeyUp, float2 KeyTan,
+	Texture2D CurDepth, SamplerState CS, float3 CurPos, float3 CurFwd, float3 CurRight, float3 CurUp, float2 CurTan,
+	float EdgeDispPx, float DispScale, float Push, float3 RoomSeat,
+	float3 MapX, float3 MapY, float3 MapZ, float3 MapT, out float Valid)
+{
+	Valid = 0.0;
+	const float ZS = Texture2DSampleLevel(KeyDepth, KS, UV, 0).r;
+	float MaxJump = 0.0;
+	float ZN = 0.0;
+	const float2 Offsets[4] = { float2(GridStep.x, 0), float2(-GridStep.x, 0), float2(0, GridStep.y), float2(0, -GridStep.y) };
+	[unroll] for (int i = 0; i < 4; ++i)
+	{
+		const float N = Texture2DSampleLevel(KeyDepth, KS, saturate(UV + Offsets[i]), 0).r;
+		if (N > 0.0)
+		{
+			ZN = ZN > 0.0 ? ZN : N;
+			if (ZS > 0.0)
+			{
+				MaxJump = max(MaxJump, abs(DispScale / N - DispScale / ZS));
+			}
+		}
+	}
+	if (ZS <= 0.0 && ZN <= 0.0)
+	{
+		return Teleop_RemoteToRoomLocal(KeyPos, MapX, MapY, MapZ, MapT) - LocalPos;
+	}
+	float3 P = Teleop_CamUnproject(UV, ZS > 0.0 ? ZS : ZN, KeyPos, KeyFwd, KeyRight, KeyUp, KeyTan);
+	bool bValid = ZS > 0.0 && MaxJump <= EdgeDispPx;
+
+	if (bValid)
+	{
+		float ZC;
+		const float2 UVC = Teleop_CamProject(P, CurPos, CurFwd, CurRight, CurUp, CurTan, ZC);
+		if (ZC > 0.0 && all(UVC > 0.0) && all(UVC < 1.0))
+		{
+			const float ZCur = Texture2DSampleLevel(CurDepth, CS, UVC, 0).r;
+			if (ZCur > 0.0 && DispScale / ZC - DispScale / ZCur > EdgeDispPx)
+			{
+				bValid = false;
+			}
+		}
+	}
+
+	const float3 Eye = Teleop_RoomLocalToRemote(Teleop_EyeRoomLocal(RoomSeat), MapX, MapY, MapZ, MapT);
+	P = Eye + (P - Eye) * (1.0 + Push);
+	Valid = bValid ? 1.0 : 0.0;
+	return Teleop_RemoteToRoomLocal(P, MapX, MapY, MapZ, MapT) - LocalPos;
+}

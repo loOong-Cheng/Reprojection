@@ -198,8 +198,18 @@ else
 {{
     FTeleopEyeCam CL; CL.Pos = CamPosL; CL.Fwd = CamFwdL; CL.Right = CamRightL; CL.Up = CamUpL;
     FTeleopEyeCam CR; CR.Pos = CamPosR; CR.Fwd = CamFwdR; CR.Right = CamRightR; CR.Up = CamUpR;
-    C = Teleop_PresentSphere(ViewportUV, LeftTex, LeftTexSampler, RightTex, RightTexSampler, CL, CR, TanHalfFov.xy,
-        SphereR, Feather, RoomSeat, MapX, MapY, MapZ, MapT);
+    if (Fill > 0.5)
+    {{
+        // M4 hole fill 1 (also the rest of fill 2): nearest background pixel instead of the sphere's sample.
+        C = Teleop_PresentBackgroundFill(ViewportUV, LeftTex, LeftTexSampler, RightTex, RightTexSampler,
+            DepthL, DepthLSampler, DepthR, DepthRSampler, CL, CR, TanHalfFov.xy, SphereR, Feather,
+            RoomSeat, MapX, MapY, MapZ, MapT, FrameSize.xy, SearchPx, EdgeDispPx, DispScale);
+    }}
+    else
+    {{
+        C = Teleop_PresentSphere(ViewportUV, LeftTex, LeftTexSampler, RightTex, RightTexSampler, CL, CR, TanHalfFov.xy,
+            SphereR, Feather, RoomSeat, MapX, MapY, MapZ, MapT);
+    }}
 }}
 // Frames hold the capture's scene color, which is already pre-exposed like this view's scene color
 // (both use the project's fixed exposure; measured M0 == GT brightness). ExposureScale is a manual trim.
@@ -308,20 +318,28 @@ def _frame_params(g):
 
 
 def build_present():
-    """M_TeleopPresent: post process (Scene Color Before Bloom). Mode 0 = M0 head-locked, 1 = sphere (M1/M2/M4)."""
+    """M_TeleopPresent: post process (Scene Color Before Bloom). Mode 0 = M0 head-locked, 1 = sphere (M1/M2/M4).
+    Fill 1 (M4 only): the mesh's holes get the nearest background pixel instead of the sphere's sample."""
     mat = _new_material("M_TeleopPresent")
     mat.set_editor_property("material_domain", unreal.MaterialDomain.MD_POST_PROCESS)
     mat.set_editor_property("blendable_location", unreal.BlendableLocation.BL_SCENE_COLOR_BEFORE_BLOOM)
     g = _Graph(mat)
     _frame_params(g)
+    g.texture("LeftDepth", "DepthL")
+    g.texture("RightDepth", "DepthR")
     g.scalar("Feather", 0.01)
     g.scalar("Mode", 0.0)
     g.scalar("SphereR", 100.0)
+    g.scalar("Fill", 0.0)
+    g.scalar("SearchPx", 128.0)
+    g.scalar("EdgeDispPx", 3.0)
+    g.scalar("DispScale", 2867.0)  # reference f * b (px * cm): 1280 px / 110 deg, 64 mm
+    g.vector("FrameSize", (1280.0, 960.0, 0.0))
     g.vector("RoomSeat")
     g.node("SceneColor", _scene_texture(mat, unreal.SceneTextureId.PPI_POST_PROCESS_INPUT0, -1400, 1400), "Color")
     g.node("Stencil", _scene_texture(mat, unreal.SceneTextureId.PPI_CUSTOM_STENCIL, -1400, 1550), "Color")
-    inputs = ["LeftTex", "RightTex", "TanHalfFov", "Feather", "ExposureScale", "SceneColor", "Stencil", "Mode", "SphereR",
-              "RoomSeat"] + CAM_INPUTS + MAP_INPUTS
+    inputs = ["LeftTex", "RightTex", "DepthL", "DepthR", "TanHalfFov", "Feather", "ExposureScale", "SceneColor", "Stencil", "Mode",
+              "SphereR", "Fill", "SearchPx", "EdgeDispPx", "DispScale", "FrameSize", "RoomSeat"] + CAM_INPUTS + MAP_INPUTS
     custom = g.custom(PRESENT_CODE, unreal.CustomMaterialOutputType.CMOT_FLOAT3, PRESENT_USH, inputs, desc="TeleopPresent")
     MEL.connect_material_property(custom, "", unreal.MaterialProperty.MP_EMISSIVE_COLOR)
     _finish(mat)
@@ -367,6 +385,95 @@ def build_depth_mesh():
 
     color = g.custom(MESH_COLOR_CODE, unreal.CustomMaterialOutputType.CMOT_FLOAT3, PRESENT_USH, ["LeftTex", "RightTex", "UV", "ExposureScale"],
                      x=-400, y=100, desc="DepthMeshColor")
+    MEL.connect_material_property(color, "", unreal.MaterialProperty.MP_EMISSIVE_COLOR)
+    _finish(mat)
+
+
+MEMORY_USH = "/Reprojection/Teleop/Memory.ush"
+
+KEY_COLOR_CODE = "return Texture2DSampleLevel(Src, SrcSampler, UV.xy, 0).rgb;"
+
+KEY_DEPTH_CODE = "return Teleop_KeyframeBandDepth(Depth, DepthSampler, UV.xy, Texel.xy, BandTexels, DispScale, EdgeDispPx).xxx;"
+
+MEMORY_WPO_CODE = """
+float Valid;
+float3 Offset = Teleop_MemoryMeshOffset(UV.xy, LocalPos, GridStep.xy, KeyDepth, KeyDepthSampler,
+    KeyPos, KeyFwd, KeyRight, KeyUp, KeyTan.xy, CurDepth, CurDepthSampler, CurPos, CurFwd, CurRight, CurUp, CurTan.xy,
+    EdgeDispPx, DispScale, Push, RoomSeat, MapX, MapY, MapZ, MapT, Valid);
+return float4(Offset, Valid);
+"""
+
+MEMORY_COLOR_CODE = "return Texture2DSampleLevel(KeyColor, KeyColorSampler, UV.xy, 0).rgb * ExposureScale;"
+
+
+def build_memory():
+    """M4 hole fill 2 (keyframe memory, UTeleopMemory):
+    M_TeleopKeyframeColor / M_TeleopKeyframeDepth: render-target passes that store a shown frame as a keyframe (colour
+    at depth resolution; depth kept only on the background side of depth edges within BandTexels).
+    M_TeleopMemoryMesh: a keyframe as a depth mesh (like M3, one camera for both eyes), carved against the current
+    frame's depth and pushed back along the eye ray so the current mesh wins."""
+    mat, g = _render_target_material("M_TeleopKeyframeColor")
+    g.texture("Src")
+    c = g.custom(KEY_COLOR_CODE, unreal.CustomMaterialOutputType.CMOT_FLOAT3, None, ["Src", "UV"], desc="KeyframeColor")
+    MEL.connect_material_property(c, "", unreal.MaterialProperty.MP_EMISSIVE_COLOR)
+    _finish(mat)
+
+    mat, g = _render_target_material("M_TeleopKeyframeDepth")
+    g.texture("Depth")
+    g.vector("Texel", (1.0 / 640.0, 1.0 / 480.0, 0.0))
+    g.scalar("BandTexels", 64.0)
+    g.scalar("DispScale", 2867.0)
+    g.scalar("EdgeDispPx", 3.0)
+    c = g.custom(KEY_DEPTH_CODE, unreal.CustomMaterialOutputType.CMOT_FLOAT3, MEMORY_USH,
+                 ["Depth", "UV", "Texel", "BandTexels", "DispScale", "EdgeDispPx"], desc="KeyframeBandDepth")
+    MEL.connect_material_property(c, "", unreal.MaterialProperty.MP_EMISSIVE_COLOR)
+    _finish(mat)
+
+    mat = _new_material("M_TeleopMemoryMesh")
+    mat.set_editor_property("shading_model", unreal.MaterialShadingModel.MSM_UNLIT)
+    mat.set_editor_property("blend_mode", unreal.BlendMode.BLEND_MASKED)
+    mat.set_editor_property("two_sided", True)
+    mat.set_editor_property("opacity_mask_clip_value", 0.5)
+    g = _Graph(mat)
+    for t in ("KeyColor", "KeyDepth", "CurDepth"):
+        g.texture(t)
+    key_cam = ["KeyPos", "KeyFwd", "KeyRight", "KeyUp"]
+    cur_cam = ["CurPos", "CurFwd", "CurRight", "CurUp"]
+    for n in key_cam + cur_cam + MAP_INPUTS + ["RoomSeat"]:
+        g.vector(n)
+    g.vector("KeyTan", (1.428, 1.071, 0.0))
+    g.vector("CurTan", (1.428, 1.071, 0.0))
+    g.vector("GridStep", (1.0 / 320.0, 1.0 / 240.0, 0.0))
+    g.scalar("EdgeDispPx", 3.0)
+    g.scalar("DispScale", 2867.0)
+    g.scalar("Push", 0.01)
+    g.scalar("ExposureScale", 1.0)
+    g.node("UV", _expr(mat, unreal.MaterialExpressionTextureCoordinate, -1400, 1400))
+    local = _expr(mat, unreal.MaterialExpressionLocalPosition, -1400, 1500)
+    local.set_editor_property("included_offsets", unreal.PositionIncludedOffsets.EXCLUDE_OFFSETS)
+    g.node("LocalPos", local)
+
+    wpo_inputs = (["UV", "LocalPos", "GridStep", "KeyDepth"] + key_cam + ["KeyTan", "CurDepth"] + cur_cam +
+                  ["CurTan", "EdgeDispPx", "DispScale", "Push", "RoomSeat"] + MAP_INPUTS)
+    wpo = g.custom(MEMORY_WPO_CODE, unreal.CustomMaterialOutputType.CMOT_FLOAT4, MEMORY_USH, wpo_inputs, x=-700, y=-300, desc="MemoryMeshWPO")
+    offset = _expr(mat, unreal.MaterialExpressionComponentMask, -400, -300)
+    for c, v in (("r", True), ("g", True), ("b", True), ("a", False)):
+        offset.set_editor_property(c, v)
+    _connect(wpo, "", offset, ["", "Input"])
+    MEL.connect_material_property(offset, "", unreal.MaterialProperty.MP_WORLD_POSITION_OFFSET)
+
+    valid = _expr(mat, unreal.MaterialExpressionComponentMask, -400, -150)
+    for c, v in (("r", False), ("g", False), ("b", False), ("a", True)):
+        valid.set_editor_property(c, v)
+    _connect(wpo, "", valid, ["", "Input"])
+    interp = _expr(mat, unreal.MaterialExpressionVertexInterpolator, -250, -150)
+    _connect(valid, "", interp, ["VS"])
+    g.node("Valid", interp, "PS")
+    mask = g.custom("return Valid > 0.999 ? 1.0 : 0.0;", unreal.CustomMaterialOutputType.CMOT_FLOAT1, None, ["Valid"], x=-100, y=-150, desc="ValidMask")
+    MEL.connect_material_property(mask, "", unreal.MaterialProperty.MP_OPACITY_MASK)
+
+    color = g.custom(MEMORY_COLOR_CODE, unreal.CustomMaterialOutputType.CMOT_FLOAT3, None, ["KeyColor", "UV", "ExposureScale"],
+                     x=-400, y=100, desc="MemoryMeshColor")
     MEL.connect_material_property(color, "", unreal.MaterialProperty.MP_EMISSIVE_COLOR)
     _finish(mat)
 
@@ -435,13 +542,15 @@ def build_all():
     build_present()
     build_depth_mesh()
     build_depth_passes()
+    build_memory()
     build_checker()
 
 
 def report():
     """Print shader instruction counts (non-zero = compiled) for all Teleop materials."""
     for name in ("M_TeleopUnlitColor", "M_TeleopLitColor", "M_TeleopGhost", "M_TeleopTextUnlit", "M_EyeTest_PP", "M_EyeTest_Vertex", "M_TeleopPresent", "M_TeleopDepthMesh",
-                 "M_TeleopDepthMinMax", "M_TeleopDepthDegrade", "M_TeleopCopyR", "M_TeleopChecker"):
+                 "M_TeleopDepthMinMax", "M_TeleopDepthDegrade", "M_TeleopCopyR", "M_TeleopKeyframeColor", "M_TeleopKeyframeDepth",
+                 "M_TeleopMemoryMesh", "M_TeleopChecker"):
         m = EAL.load_asset(f"{FOLDER}/{name}")
         if not m:
             unreal.log_warning(f"[teleop_materials] missing {name}")

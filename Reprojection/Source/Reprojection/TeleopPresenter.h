@@ -12,6 +12,7 @@ class ATeleopOperatorPawn;
 class UMaterialInstanceDynamic;
 class UMaterialInterface;
 class UProceduralMeshComponent;
+class UTeleopMemory;
 class UTextureRenderTarget2D;
 struct FTeleopFrameMeta;
 
@@ -39,7 +40,8 @@ struct FTeleopDisplayStats
  * Presentation (HANDOFF §2, §6): picks the frame to show (newest with A_i <= now, or with the jitter buffer
  * max(A_i, C_i + D_target); never older than the frame shown), and renders it with the active method:
  *   M0 head-locked, M1/M2 sphere (post process, per pixel ray-sphere), M3 depth mesh (grid displaced in the
- *   vertex shader), M4 = sphere background + mesh (custom stencil 2), GT = operator moved into the remote world.
+ *   vertex shader), M4 = mesh (custom stencil 2) with its holes filled by teleop.M4.Fill: 0 sphere, 1 nearest
+ *   background pixel (post process), 2 keyframe memory (UTeleopMemory) then 1; GT = operator moved into the remote world.
  * Compensation uses only what a real system has: the frame, its capture pose and the degraded depth (§6.1).
  * Also: M2 adaptive radius (async GPU readback of the shown frame's central depth), HUD, CSV logging,
  * blind test (§8) and GT screenshot pairs (teleop.ScreenshotPair).
@@ -92,6 +94,9 @@ public:
 
 	FTeleopBlindTest& GetBlindTest() { return BlindTest; }
 
+	/** M4 fill 2 keyframe memory (null before Init). */
+	UTeleopMemory* GetMemory() const { return Memory; }
+
 protected:
 	virtual void BeginPlay() override;
 
@@ -132,6 +137,7 @@ private:
 	UPROPERTY(Transient) TObjectPtr<UMaterialInstanceDynamic> PresentMID;
 	UPROPERTY(Transient) TObjectPtr<UMaterialInstanceDynamic> MeshMID;
 	UPROPERTY(Transient) TObjectPtr<UProceduralMeshComponent> DepthMesh;
+	UPROPERTY(Transient) TObjectPtr<UTeleopMemory> Memory;
 	FIntPoint DepthMeshGrid = FIntPoint::ZeroValue;
 
 	ETeleopMethod ActiveMethod = ETeleopMethod::M0_Naive;

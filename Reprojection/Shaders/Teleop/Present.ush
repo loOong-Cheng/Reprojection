@@ -79,3 +79,96 @@ float3 Teleop_PresentSphere(float2 ViewportUV, Texture2D LeftTex, SamplerState L
 	}
 	return Teleop_SampleEyeFrame(LeftTex, LeftSampler, RightTex, RightSampler, saturate(UV)).rgb * W;
 }
+
+// Walks from UV0 in steps of StepUV (at most NumSteps) and returns the first uv whose depth is farther than DispRef
+// by more than EdgeDispPx (disparity at the reference scale DispScale = f * b), i.e. background beyond an edge,
+// moved two more steps past the edge's mixed pixels. Returns UV0 if there is none.
+float2 Teleop_FindBackground(float2 UV0, float2 StepUV, int NumSteps, float DispRef, float EdgeDispPx, float DispScale,
+	Texture2D DepthL, SamplerState DLS, Texture2D DepthR, SamplerState DRS, out bool bFound)
+{
+	bFound = false;
+	[loop] for (int i = 1; i <= NumSteps; ++i)
+	{
+		const float2 UV = UV0 + StepUV * i;
+		if (any(UV < 0.0) || any(UV > 1.0))
+		{
+			break;
+		}
+		const float Z = Teleop_SampleEyeDepth(DepthL, DLS, DepthR, DRS, UV);
+		if (Z > 0.0 && DispScale / Z < DispRef - EdgeDispPx)
+		{
+			bFound = true;
+			return saturate(UV + StepUV * 2.0);
+		}
+	}
+	return UV0;
+}
+
+// M4 hole fill 1, nearest background pixel. Runs only where the M3 mesh does not cover the pixel (a disocclusion or
+// missing depth). The sphere would sample the robot image where, seen from the camera, the occluder is, and paint a
+// copy of it. Instead: start at the sphere's sample, read the depth there (the occluder), and walk along the image
+// direction of the eye - camera offset (the side a disocclusion opens to) to the first clearly farther pixel, the
+// background just beyond the occluder's edge; use its colour. A short walk the other way first catches thin rims of
+// missing depth on the trailing edge. Without parallax, depth or an edge nearby, the sphere's sample is kept (it is
+// exact for pure rotation).
+float3 Teleop_PresentBackgroundFill(float2 ViewportUV, Texture2D LeftTex, SamplerState LeftSampler, Texture2D RightTex,
+	SamplerState RightSampler, Texture2D DepthL, SamplerState DLS, Texture2D DepthR, SamplerState DRS,
+	FTeleopEyeCam CamL, FTeleopEyeCam CamR, float2 TanHalfFov, float Radius, float Feather,
+	float3 RoomSeat, float3 MapX, float3 MapY, float3 MapZ, float3 MapT,
+	float2 FrameSize, float SearchPx, float EdgeDispPx, float DispScale)
+{
+	FTeleopEyeCam Cam = CamR; // HLSL 2021: no ?: on structs
+	if (Teleop_EyeIndex() < 0.5)
+	{
+		Cam = CamL;
+	}
+
+	const float3 O = Teleop_RoomLocalToRemote(Teleop_EyeRoomLocal(RoomSeat), MapX, MapY, MapZ, MapT);
+	const float3 V = normalize(Teleop_RoomToRemoteDir(Teleop_PixelWorldDir(ViewportUV), MapX, MapY, MapZ));
+	const float S = Teleop_RaySphere(O, V, Cam.Pos, Radius);
+	if (S <= 0.0)
+	{
+		return 0.0;
+	}
+	const float3 P = O + S * V;
+	float Z;
+	const float2 UV0 = Teleop_CamProject(P, Cam.Pos, Cam.Fwd, Cam.Right, Cam.Up, TanHalfFov, Z);
+	const float W = Z > 0.0 ? Teleop_FrameWeight(UV0, Feather) : 0.0;
+	if (W <= 0.0)
+	{
+		return 0.0;
+	}
+
+	float2 UV = UV0;
+	// Image direction a disocclusion opens to: how P moves in the image when shifted by the eye - camera offset.
+	float ZShift;
+	const float2 UV1 = Teleop_CamProject(P + (O - Cam.Pos), Cam.Pos, Cam.Fwd, Cam.Right, Cam.Up, TanHalfFov, ZShift);
+	float2 DirPx = (UV1 - UV0) * FrameSize;
+	const float LenPx = length(DirPx);
+	if (ZShift > 0.0 && LenPx > 0.25)
+	{
+		const int NumSteps = 48;
+		const float StepPx = max(SearchPx / NumSteps, 1.0);
+		const float2 StepUV = DirPx / LenPx * StepPx / FrameSize;
+		// Occluder disparity at the start: the nearest valid depth of the first samples.
+		float DispRef = 0.0;
+		[unroll] for (int k = 0; k < 3; ++k)
+		{
+			const float Zk = Teleop_SampleEyeDepth(DepthL, DLS, DepthR, DRS, saturate(UV0 + StepUV * k));
+			if (Zk > 0.0)
+			{
+				DispRef = max(DispRef, DispScale / Zk);
+			}
+		}
+		if (DispRef > 0.0)
+		{
+			bool bFound;
+			UV = Teleop_FindBackground(UV0, -StepUV, 3, DispRef, EdgeDispPx, DispScale, DepthL, DLS, DepthR, DRS, bFound);
+			if (!bFound)
+			{
+				UV = Teleop_FindBackground(UV0, StepUV, NumSteps, DispRef, EdgeDispPx, DispScale, DepthL, DLS, DepthR, DRS, bFound);
+			}
+		}
+	}
+	return Teleop_SampleEyeFrame(LeftTex, LeftSampler, RightTex, RightSampler, saturate(UV)).rgb * W;
+}

@@ -38,6 +38,45 @@ namespace TeleopCVars
 		TEXT("M4 background sphere: 1 = M1 (fixed R), 2 = M2 (adaptive R)."),
 		ECVF_Default);
 
+	TAutoConsoleVariable<int32> M4Fill(
+		TEXT("teleop.M4.Fill"), 0,
+		TEXT("M4: what fills the M3 mesh's holes. 0 = sphere (HANDOFF §6; paints copies of near objects into disocclusions),\n")
+		TEXT("1 = nearest background pixel (walk from the sphere's sample to the background beyond the occluder's edge),\n")
+		TEXT("2 = memory of earlier frames (keyframe meshes), fill 1 where memory has nothing."),
+		ECVF_Default);
+
+	TAutoConsoleVariable<float> FillSearchPx(
+		TEXT("teleop.Fill.SearchPx"), 128.f,
+		TEXT("M4 fill 1: how far to walk for the background, robot camera pixels (a hole is at most ~t*f*(1/d_near - 1/d_far) wide)."),
+		ECVF_Default);
+
+	TAutoConsoleVariable<int32> MemoryKeyframes(
+		TEXT("teleop.Memory.Keyframes"), 16, TEXT("M4 fill 2: number of keyframes kept (1..32; changing it clears the memory)."), ECVF_Default);
+
+	TAutoConsoleVariable<float> MemoryMinMoveCm(
+		TEXT("teleop.Memory.MinMoveCm"), 3.f,
+		TEXT("M4 fill 2: a frame becomes a keyframe if the robot camera moved more than this (or turned more than MinTurnDeg)\n")
+		TEXT("since every stored keyframe, cm."),
+		ECVF_Default);
+
+	TAutoConsoleVariable<float> MemoryMinTurnDeg(
+		TEXT("teleop.Memory.MinTurnDeg"), 5.f, TEXT("M4 fill 2: see teleop.Memory.MinMoveCm, degrees."), ECVF_Default);
+
+	TAutoConsoleVariable<float> MemoryBandPx(
+		TEXT("teleop.Memory.BandPx"), 128.f,
+		TEXT("M4 fill 2: a keyframe keeps only depth on the background side of depth edges, within this many robot camera\n")
+		TEXT("pixels of a clearly nearer surface (where holes open; user idea 2026-11-04). 0 = keep the whole frame."),
+		ECVF_Default);
+
+	TAutoConsoleVariable<int32> MemoryGridStride(
+		TEXT("teleop.Memory.GridStride"), 2, TEXT("M4 fill 2: one keyframe-mesh vertex per this many depth texels (1..8)."), ECVF_Default);
+
+	TAutoConsoleVariable<float> MemoryPush(
+		TEXT("teleop.Memory.Push"), 0.01f,
+		TEXT("M4 fill 2: keyframe meshes are pushed back along the eye ray by this factor x (1 + age rank), so the current\n")
+		TEXT("mesh and then newer keyframes win the depth test."),
+		ECVF_Default);
+
 	TAutoConsoleVariable<float> M3EdgeDispPx(
 		TEXT("teleop.M3.EdgeDispPx"), 3.f,
 		TEXT("M3: disparity jump (px, reference f * b of a 64 mm camera pair) between neighbor vertices above which\n")

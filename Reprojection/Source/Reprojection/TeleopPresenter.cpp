@@ -8,6 +8,7 @@
 #include "TeleopGameMode.h"
 #include "TeleopLatencyModel.h"
 #include "TeleopLogger.h"
+#include "TeleopMemory.h"
 #include "TeleopOperatorPawn.h"
 
 #include "DynamicRHI.h"
@@ -102,6 +103,23 @@ static FAutoConsoleCommandWithWorld GTeleopScreenshotPair(TEXT("teleop.Screensho
 	TEXT("Save a screenshot of the current method and one of GT at the same pose into the session log folder."),
 	FConsoleCommandWithWorldDelegate::CreateLambda([](UWorld* W) { if (ATeleopPresenter* P = FindPresenter(W)) { P->RequestScreenshotPair(); } }));
 
+static FAutoConsoleCommandWithWorld GTeleopMemoryClear(TEXT("teleop.Memory.Clear"),
+	TEXT("M4 fill 2: forget all keyframes."),
+	FConsoleCommandWithWorldDelegate::CreateLambda([](UWorld* W)
+	{
+		if (ATeleopPresenter* P = FindPresenter(W)) { if (UTeleopMemory* M = P->GetMemory()) { M->Clear(); } }
+	}));
+
+static FAutoConsoleCommandWithWorld GTeleopMemoryStats(TEXT("teleop.Memory.Stats"),
+	TEXT("M4 fill 2: log the keyframes (age, camera position, share of texels the edge band keeps). Reads the GPU back."),
+	FConsoleCommandWithWorldDelegate::CreateLambda([](UWorld* W)
+	{
+		if (ATeleopPresenter* P = FindPresenter(W))
+		{
+			if (UTeleopMemory* M = P->GetMemory()) { UE_LOG(LogTeleop, Log, TEXT("%s"), *M->Describe(FPlatformTime::Seconds())); }
+		}
+	}));
+
 static FAutoConsoleCommandWithWorld GTeleopBlindToggle(TEXT("teleop.Blind.Toggle"),
 	TEXT("Start / stop the blind test (menu button)."),
 	FConsoleCommandWithWorldDelegate::CreateLambda([](UWorld* W) { if (ATeleopPresenter* P = FindPresenter(W)) { P->ToggleBlindTest(); } }));
@@ -180,6 +198,10 @@ void ATeleopPresenter::Init(ATeleopGameMode* InGameMode, ATeleopOperatorPawn* In
 		DepthMesh->SetVisibility(false);
 		DepthMesh->RegisterComponent();
 		DepthMesh->AttachToComponent(InPawn->GetVROrigin(), FAttachmentTransformRules::SnapToTargetNotIncludingScale);
+
+		// M4 fill 2: keyframe meshes, in the same room frame and with the same stencil as the M3 mesh.
+		Memory = NewObject<UTeleopMemory>(this, TEXT("Memory"));
+		Memory->Initialize(this, InPawn->GetVROrigin(), DepthMeshStencilValue);
 	}
 }
 
@@ -431,6 +453,27 @@ void ATeleopPresenter::UpdateMaterialParams()
 		// No valid depth for this frame yet (preset just changed): hide the mesh instead of showing stale geometry.
 		const bool bMesh = ActiveMethod == ETeleopMethod::M3_DepthMesh || ActiveMethod == ETeleopMethod::M4_Hybrid;
 		DepthMesh->SetVisibility(bMesh && Meta.bDepthValid);
+	}
+
+	// M4 hole fills: 1 = nearest background pixel in the post process; 2 = keyframe memory, then fill 1 for the rest.
+	const float FocalPx = (Meta.Width * 0.5f) / FMath::Tan(FMath::DegreesToRadians(Meta.HorizontalFovDeg * 0.5f));
+	const int32 Fill = ActiveMethod == ETeleopMethod::M4_Hybrid ? FMath::Clamp(TeleopCVars::M4Fill.GetValueOnGameThread(), 0, 2) : 0;
+	if (PresentMID)
+	{
+		PresentMID->SetScalarParameterValue(TEXT("Fill"), Fill >= 1 ? 1.f : 0.f);
+		PresentMID->SetVectorParameterValue(TEXT("FrameSize"), FLinearColor(float(Meta.Width), float(Meta.Height), 0.f, 0.f));
+		PresentMID->SetScalarParameterValue(TEXT("SearchPx"), TeleopCVars::FillSearchPx.GetValueOnGameThread());
+		PresentMID->SetScalarParameterValue(TEXT("EdgeDispPx"), TeleopCVars::M3EdgeDispPx.GetValueOnGameThread());
+		PresentMID->SetScalarParameterValue(TEXT("DispScale"), FocalPx * 6.4f);
+	}
+	if (Memory)
+	{
+		UTeleopMemory::FDrawParams Params;
+		Params.Map = Map;
+		Params.RoomSeat = RoomSeat;
+		Params.DispScale = FocalPx * 6.4f; // reference f * b of a 64 mm pair, as for the M3 rubber-sheet test
+		Params.EdgeDispPx = TeleopCVars::M3EdgeDispPx.GetValueOnGameThread();
+		Memory->Update(FPlatformTime::Seconds(), Buffer, ShownSlot, Fill == 2 && Meta.bDepthValid, Params);
 	}
 }
 
@@ -736,6 +779,13 @@ FString ATeleopPresenter::MethodLabel() const
 	if (BlindTest.IsActive())
 	{
 		return BlindTest.GetConditionCode(); // method hidden in blind mode
+	}
+	if (ActiveMethod == ETeleopMethod::M4_Hybrid)
+	{
+		const int32 Fill = FMath::Clamp(TeleopCVars::M4Fill.GetValueOnGameThread(), 0, 2);
+		return Fill == 0 ? FString(TEXT("M4 hybrid (fill: sphere)"))
+			: Fill == 1 ? FString(TEXT("M4 hybrid (fill: nearest bg)"))
+			: FString::Printf(TEXT("M4 hybrid (fill: memory %d)"), Memory ? Memory->NumKeyframes() : 0);
 	}
 	return MethodName(ActiveMethod);
 }

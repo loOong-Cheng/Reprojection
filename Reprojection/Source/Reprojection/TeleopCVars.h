@@ -16,6 +16,14 @@ namespace TeleopCVars
 	extern TAutoConsoleVariable<float> M2SmoothSec;
 	extern TAutoConsoleVariable<float> M2WindowFrac;
 	extern TAutoConsoleVariable<int32> M4Sphere;
+	extern TAutoConsoleVariable<int32> M4Fill;
+	extern TAutoConsoleVariable<float> FillSearchPx;
+	extern TAutoConsoleVariable<int32> MemoryKeyframes;
+	extern TAutoConsoleVariable<float> MemoryMinMoveCm;
+	extern TAutoConsoleVariable<float> MemoryMinTurnDeg;
+	extern TAutoConsoleVariable<float> MemoryBandPx;
+	extern TAutoConsoleVariable<int32> MemoryGridStride;
+	extern TAutoConsoleVariable<float> MemoryPush;
 	extern TAutoConsoleVariable<float> M3EdgeDispPx;
 	extern TAutoConsoleVariable<int32> EyeTest;
 

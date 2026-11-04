@@ -74,6 +74,16 @@ float3 Teleop_PixelWorldDir(float2 ViewportUV)
 	return normalize(mul(DirView, (float3x3)ResolvedView.ViewToTranslatedWorld));
 }
 
+// The current eye's own degraded depth (cm, 0 = invalid). Shared by the depth mesh and the M4 hole fills.
+float Teleop_SampleEyeDepth(Texture2D DepthL, SamplerState SL, Texture2D DepthR, SamplerState SR, float2 UV)
+{
+	if (Teleop_EyeIndex() < 0.5)
+	{
+		return Texture2DSampleLevel(DepthL, SL, UV, 0).r;
+	}
+	return Texture2DSampleLevel(DepthR, SR, UV, 0).r;
+}
+
 // 1 inside the frame, fading to 0 over Feather (uv units) at the border.
 float Teleop_FrameWeight(float2 UV, float Feather)
 {

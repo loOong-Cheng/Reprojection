@@ -6,15 +6,6 @@
 
 #include "/Reprojection/Teleop/Camera.ush"
 
-float Teleop_SampleEyeDepth(Texture2D DepthL, SamplerState SL, Texture2D DepthR, SamplerState SR, float2 UV)
-{
-	if (Teleop_EyeIndex() < 0.5)
-	{
-		return Texture2DSampleLevel(DepthL, SL, UV, 0).r;
-	}
-	return Texture2DSampleLevel(DepthR, SR, UV, 0).r;
-}
-
 // Vertex stage. LocalPos: the vertex position in the mesh component's space (= operator room, seat origin, no
 // rotation). Returns the world position offset; Valid = 1 if the vertex has depth and no discontinuity next to it.
 float3 Teleop_DepthMeshOffset(float2 UV, float3 LocalPos, float2 GridStep,
