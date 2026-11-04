@@ -12,6 +12,7 @@ namespace TeleopCVars
 	// Presentation (HANDOFF §6). Values match ETeleopMethod.
 	extern TAutoConsoleVariable<int32> Method;
 	extern TAutoConsoleVariable<float> SphereRadiusCm;
+	extern TAutoConsoleVariable<float> M2WindowSec;
 	extern TAutoConsoleVariable<float> M2SmoothSec;
 	extern TAutoConsoleVariable<float> M2WindowFrac;
 	extern TAutoConsoleVariable<int32> M4Sphere;
@@ -33,6 +34,7 @@ namespace TeleopCVars
 	extern TAutoConsoleVariable<float> BaselineMm;
 	extern TAutoConsoleVariable<int32> CamMountOffset;
 	extern TAutoConsoleVariable<int32> NeckMode;
+	extern TAutoConsoleVariable<float> WaistYawShare;
 
 	// Study tools (HANDOFF §7.8, §8).
 	extern TAutoConsoleVariable<int32> Log;
@@ -48,5 +50,13 @@ namespace TeleopCVars
 
 	// Performance / automation.
 	extern TAutoConsoleVariable<float> DebugProfileGPUAfterSec;
+	extern TAutoConsoleVariable<float> DebugLogHandsSec;
+	extern TAutoConsoleVariable<int32> DebugHideRobotHands;
+	extern TAutoConsoleVariable<int32> DebugShowRobotCamera;
+	extern TAutoConsoleVariable<int32> Observer;
+	extern TAutoConsoleVariable<int32> ObserverView;
+	extern TAutoConsoleVariable<float> ObserverHz;
+	extern TAutoConsoleVariable<float> ObserverSplit;
+	extern TAutoConsoleVariable<float> ObserverExposure;
 	extern TAutoConsoleVariable<float> DebugQuitAfterSec;
 }

@@ -67,6 +67,9 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Teleop")
 	ETeleopMethod GetActiveMethod() const { return ActiveMethod; }
 
+	/** Capture pose of the frame shown right now (left / right robot camera, world). False before the first frame. */
+	bool GetShownFramePose(FTransform& OutLeft, FTransform& OutRight) const;
+
 	/** Current M2 adaptive radius, cm. */
 	UFUNCTION(BlueprintPure, Category = "Teleop")
 	float GetAdaptiveRadiusCm() const { return AdaptiveRadiusCm; }
@@ -77,10 +80,12 @@ public:
 	void AdjustBaseLatency(int32 Direction);
 	void ToggleJitterBuffer();
 	void CycleDepthPreset();
+	void CycleNeckMode();
 	void AdjustSphereRadius(int32 Direction);
 	void AdjustBaseline(int32 Direction);
 	void ToggleBlindTest();
 	void AdjustRating(int32 Direction);
+	bool IsBlindTestActive() const { return BlindTest.IsActive(); }
 
 	/** Screenshot of the current method, then of GT (same pose), into the log folder. */
 	void RequestScreenshotPair();
@@ -148,6 +153,8 @@ private:
 	float AdaptiveRadiusCm = 100.f;
 	float AdaptiveTargetCm = 100.f;
 	int64 ReadbackFrameId = -1;
+	/** (time, per-frame median depth cm) of the last teleop.M2.WindowSec; the target is their median. */
+	TArray<TPair<double, float>> RadiusSamples;
 
 	// Stats window.
 	TArray<float> WindowAgesMs;

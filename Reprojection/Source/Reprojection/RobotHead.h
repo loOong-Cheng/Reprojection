@@ -19,6 +19,12 @@ class UTeleopDepthDegrader;
  * acceleration limits, and, in Full6DoF, a translation speed limit and workspace box. Cameras are mounted
  * MountOffset in front of/above the neck pivot, so pure head rotation also translates them (parallax).
  *
+ * Waist (Waist3Neck2, the default): Base -> Waist (yaw, pitch, roll; WaistToNeckCm below the neck) -> 2-DoF neck.
+ * The waist leans (pitch/roll, slower than the neck) so the neck pivot follows where the operator's neck is; it
+ * moves on a sphere around the waist, so it follows sideways/forward head motion but not height changes. Waist
+ * yaw takes teleop.Waist.YawShare of the head yaw. The neck turns relative to the torso; a sideways lean rolls the
+ * cameras (the neck has no roll).
+ *
  * Cameras: left/right USceneCaptureComponent2D, baseline b, captured manually at f_cam into the ring buffer
  * (RGB = linear scene color, A = view-space depth in cm).
  */
@@ -44,6 +50,16 @@ public:
 
 	/** Slot the presenter is showing; never overwritten. */
 	void SetProtectedSlot(int32 Slot) { ProtectedSlot = Slot; }
+
+	/** The robot cameras never render this actor (observer overlays). */
+	void HideFromRobotCameras(AActor* Actor);
+
+	// Joints, for the observer view's robot model.
+	USceneComponent* GetBase() const { return Base; }
+	USceneComponent* GetWaist() const { return Waist; }
+	USceneComponent* GetNeckPivot() const { return NeckPivot; }
+	USceneComponent* GetCameraRig() const { return CameraRig; }
+	USceneCaptureComponent2D* GetCamera(int32 Eye) const { return Eye == 0 ? CameraLeft : CameraRight; }
 
 	UPROPERTY(EditAnywhere, Category = "Teleop|Camera")
 	int32 CaptureWidth = 1280;
@@ -78,11 +94,38 @@ public:
 	UPROPERTY(EditAnywhere, Category = "Teleop|Neck")
 	FVector WorkspaceHalfExtent = FVector(25.f, 25.f, 20.f);
 
+	/** Waist pivot to neck pivot along the torso, cm (Waist3Neck2). */
+	UPROPERTY(EditAnywhere, Category = "Teleop|Waist")
+	float WaistToNeckCm = 55.f;
+
+	UPROPERTY(EditAnywhere, Category = "Teleop|Waist")
+	float WaistTauSeconds = 0.15f;
+
+	UPROPERTY(EditAnywhere, Category = "Teleop|Waist")
+	float WaistMaxRateDegPerSec = 90.f;
+
+	UPROPERTY(EditAnywhere, Category = "Teleop|Waist")
+	float WaistMaxAccelDegPerSec2 = 600.f;
+
+	/** Joint limits, degrees: pitch (lean forward/back), roll (sideways), yaw. */
+	UPROPERTY(EditAnywhere, Category = "Teleop|Waist")
+	float WaistPitchLimitDeg = 30.f;
+
+	UPROPERTY(EditAnywhere, Category = "Teleop|Waist")
+	float WaistRollLimitDeg = 20.f;
+
+	UPROPERTY(EditAnywhere, Category = "Teleop|Waist")
+	float WaistYawLimitDeg = 90.f;
+
 protected:
 	virtual void BeginPlay() override;
 
 	UPROPERTY(VisibleAnywhere, Category = "Teleop")
 	TObjectPtr<USceneComponent> Base;
+
+	/** Waist joint; the neck pivot sits WaistToNeckCm above it along the torso. */
+	UPROPERTY(VisibleAnywhere, Category = "Teleop")
+	TObjectPtr<USceneComponent> Waist;
 
 	UPROPERTY(VisibleAnywhere, Category = "Teleop")
 	TObjectPtr<USceneComponent> NeckPivot;
@@ -115,15 +158,22 @@ private:
 	int32 LastDepthSlot = INDEX_NONE;
 	double LastDepthTime = 0.0;
 
-	// Neck state, relative to Base.
+	// Waist state, relative to Base.
+	FRotator WaistRotation = FRotator::ZeroRotator;
+	FVector WaistRate = FVector::ZeroVector; // deg/s for (pitch, yaw, roll)
+
+	// Neck state, relative to the torso (Waist).
 	FRotator NeckRotation = FRotator::ZeroRotator;
 	FVector NeckRate = FVector::ZeroVector; // deg/s for (pitch, yaw, roll)
-	FVector PivotLocation = FVector::ZeroVector;
+	/** Full6DoF translation of the neck pivot from its nominal position (torso frame). */
+	FVector PivotOffset = FVector::ZeroVector;
 	bool bNeckInitialized = false;
 
 	double NextCaptureTime = 0.0;
 	int64 NextFrameId = 0;
 	int32 ProtectedSlot = INDEX_NONE;
+
+	double LastRobotLogTime = 0.0;
 
 	double RateWindowStart = 0.0;
 	int32 RateWindowCount = 0;

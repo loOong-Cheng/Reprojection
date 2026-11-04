@@ -22,9 +22,11 @@ class UTextRenderComponent;
  * the robot head and proxy hands read these streams delayed by the command latency.
  *
  * Controls (HANDOFF §8, adapted so nothing collides with grabbing):
- *   A / X        cycle method M0 > M1 > M2 > M3 > M4 > GT (blind test: confirm / next question)
- *   B / Y        cycle latency preset            right stick X   base latency -/+ 10 ms
- *   right trigger  jitter buffer on/off          right stick Y   blind-test rating -/+
+ *   A            cycle method GT > M1 > M2 > M3 > M4 > M0 (starts in GT; blind test: confirm / next question)
+ *   B            cycle latency preset            right stick X   base latency -/+ 10 ms
+ *   X            cycle neck mode                 Y               jitter buffer on/off
+ *   right stick Y  blind test: rating -/+; otherwise robot camera marker on/off (or key C)
+ *   triggers, grips, touch  robot fingers (grips also grab)
  *   left stick click  cycle depth preset         left stick Y / X  sphere radius R -/+ 10 cm, baseline b -/+ 5 mm
  *   left menu    blind test start/stop           right stick click (or R)  recenter
  *   grips        grab with the proxy hands
@@ -47,6 +49,12 @@ public:
 	/** Latest pose of a device in the tracking frame. False until the device has a valid pose. */
 	bool GetLatestLocalPose(ETeleopDevice Device, FTransform& OutPose) const;
 
+	/** Finger controls (grip, trigger, touch) of a hand, for the robot hand animation. */
+	const FTeleopFingerHistory& GetFingerHistory(bool bLeft) const { return FingerHistories[bLeft ? 0 : 1]; }
+
+	/** True if this frame's head pose is real tracking data (not the all-zero pose before tracking starts). */
+	bool IsHeadTracked() const { return bHeadTracked; }
+
 	/** GT: put the tracking origin at RemoteOrigin (the local->remote mapping); otherwise back in the room. */
 	void SetRemoteView(bool bRemote, const FTransform& RemoteOrigin);
 
@@ -54,6 +62,7 @@ public:
 	void SetCameraBlendable(UMaterialInterface* Material, bool bEnabled);
 
 	void SetHudText(const FString& Text);
+	FString GetHudText() const;
 
 	UCameraComponent* GetCamera() const { return Camera; }
 	USceneComponent* GetVROrigin() const { return VROrigin; }
@@ -98,6 +107,38 @@ protected:
 	UPROPERTY(EditAnywhere, Category = "Teleop")
 	FVector DesktopRightHand = FVector(35.f, 20.f, 85.f);
 
+	/**
+	 * Robot camera marker (teleop.Debug.ShowRobotCamera): the robot camera's real pose now (camera rig, midpoint of the
+	 * stereo pair), mapped into the tracking frame, as an orange point + view frustum. HUD stencil, so it shows over
+	 * every method; hidden in scene captures (robot cameras, observer).
+	 */
+	UPROPERTY(VisibleAnywhere, Category = "Teleop|Debug")
+	TObjectPtr<USceneComponent> RobotCamMarker;
+
+	UPROPERTY(VisibleAnywhere, Category = "Teleop|Debug")
+	TObjectPtr<UStaticMeshComponent> RobotCamPoint;
+
+	/** 4 edges apex -> far corners, 4 far-rectangle edges, 1 "up" tick. */
+	UPROPERTY(VisibleAnywhere, Category = "Teleop|Debug")
+	TArray<TObjectPtr<UStaticMeshComponent>> RobotCamEdges;
+
+	UPROPERTY(EditAnywhere, Category = "Teleop|Debug")
+	float RobotCamFrustumCm = 25.f;
+
+	UPROPERTY(EditAnywhere, Category = "Teleop|Debug")
+	float RobotCamLineCm = 0.25f;
+
+	UPROPERTY(EditAnywhere, Category = "Teleop|Debug")
+	float RobotCamPointCm = 1.5f;
+
+	UPROPERTY(EditAnywhere, Category = "Teleop|Debug")
+	/** Unlit emissive. Under the operator view's exposure this reads as the observer view's orange (robot camera now);
+	 *  the observer's own value (1, 0.45, 0.05) saturates to yellow here, the observer's colour for the shown frame. */
+	FLinearColor RobotCamColor = FLinearColor(0.35f, 0.07f, 0.f);
+
+	UPROPERTY(EditAnywhere, Category = "Teleop|Debug")
+	TSoftObjectPtr<UMaterialInterface> RobotCamMaterial;
+
 	UPROPERTY(EditAnywhere, Category = "Teleop|Debug")
 	TSoftObjectPtr<UMaterialInterface> EyeTestPostProcessMaterial;
 
@@ -107,6 +148,8 @@ protected:
 private:
 	void RecordPoses(double Now);
 	void ApplyEyeTestMode(int32 Mode);
+	void UpdateRobotCameraMarker();
+	void ToggleRobotCameraMarker(const TCHAR* Source);
 
 	void OnCycleMethod();
 	void OnRecenter();
@@ -118,6 +161,7 @@ private:
 	void OnCycleLatencyPreset();
 	void OnToggleJitterBuffer();
 	void OnCycleDepthPreset();
+	void OnCycleNeckMode();
 	void OnToggleBlind();
 	void OnRightStickX(const struct FInputActionValue& Value);
 	void OnRightStickY(const struct FInputActionValue& Value);
@@ -135,6 +179,12 @@ private:
 
 	FTeleopPoseHistory Histories[static_cast<int32>(ETeleopDevice::Num)];
 	bool bHasPose[static_cast<int32>(ETeleopDevice::Num)] = { false, false, false };
+	bool bHeadTracked = false;
+	double LastHeadLogTime = 0.0;
+
+	/** Current finger controls, [0] = left; recorded every tick. */
+	FTeleopFingerState Fingers[2];
+	FTeleopFingerHistory FingerHistories[2];
 
 	FTransform RoomTransform;
 	bool bRemoteView = false;
@@ -143,10 +193,18 @@ private:
 	TObjectPtr<UMaterialInterface> LoadedEyeTestPostProcess;
 
 	UPROPERTY(Transient)
+	TObjectPtr<class UMaterialInstanceDynamic> RobotCamMID;
+
+	UPROPERTY(Transient)
 	TObjectPtr<UInputMappingContext> MappingContext;
 
 	UPROPERTY(Transient)
 	TArray<TObjectPtr<UInputAction>> Actions;
 
 	int32 AppliedEyeTestMode = INDEX_NONE;
+
+	/** Frustum shape the marker edges were built for (rebuilt when the robot camera FOV or aspect changes). */
+	float MarkerFovDeg = -1.f;
+	float MarkerAspect = -1.f;
+	bool bMarkerShown = false;
 };

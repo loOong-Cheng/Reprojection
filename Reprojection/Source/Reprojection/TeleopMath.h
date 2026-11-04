@@ -65,4 +65,23 @@ namespace TeleopMath
 		const double S2 = -B + S;
 		return S1 > 0.0 ? S1 : (S2 > 0.0 ? S2 : -1.0);
 	}
+
+	/**
+	 * 3-DoF waist (joints yaw, then pitch, then roll: the FRotator order) carrying the neck pivot at Length along
+	 * the torso's up axis. Unit tested (Teleop.Math.Waist).
+	 */
+	inline FVector WaistNeckPosition(const FRotator& Waist, double Length)
+	{
+		return Waist.RotateVector(FVector(0.0, 0.0, Length));
+	}
+
+	/** Pitch and roll that point the torso at Target (relative to the waist pivot) for the given waist yaw. */
+	inline FRotator WaistLean(const FVector& Target, double YawDeg)
+	{
+		const FVector D = FRotator(0.0, YawDeg, 0.0).UnrotateVector(Target).GetSafeNormal(UE_SMALL_NUMBER, FVector::UpVector);
+		// FRotator(P, 0, R) turns +Z into (-cos R sin P, sin R, cos R cos P).
+		const double Roll = FMath::RadiansToDegrees(FMath::Asin(FMath::Clamp(D.Y, -1.0, 1.0)));
+		const double Pitch = FMath::RadiansToDegrees(FMath::Atan2(-D.X, D.Z));
+		return FRotator(Pitch, YawDeg, Roll);
+	}
 }

@@ -1,20 +1,43 @@
 #include "RemoteHand.h"
 
 #include "Reprojection.h"
+#include "TeleopCVars.h"
 #include "TeleopGameMode.h"
 #include "TeleopOperatorPawn.h"
 
+#include "Animation/AnimInstance.h"
 #include "Components/PrimitiveComponent.h"
-#include "Components/StaticMeshComponent.h"
+#include "Components/SkeletalMeshComponent.h"
 #include "Engine/OverlapResult.h"
-#include "Engine/StaticMesh.h"
+#include "Engine/SkeletalMesh.h"
 #include "Engine/World.h"
-#include "Materials/MaterialInstanceDynamic.h"
+#include "Materials/MaterialInterface.h"
 #include "MotionControllerComponent.h"
-#include "UObject/ConstructorHelpers.h"
 
 namespace
 {
+	/** Sets a Blueprint float ("real" = double) or bool variable by name; false if it does not exist. */
+	bool SetBlueprintNumber(UObject* Target, FName Name, double Value)
+	{
+		FProperty* Prop = Target ? Target->GetClass()->FindPropertyByName(Name) : nullptr;
+		if (FDoubleProperty* D = CastField<FDoubleProperty>(Prop))
+		{
+			D->SetPropertyValue_InContainer(Target, Value);
+			return true;
+		}
+		if (FFloatProperty* F = CastField<FFloatProperty>(Prop))
+		{
+			F->SetPropertyValue_InContainer(Target, float(Value));
+			return true;
+		}
+		if (FBoolProperty* B = CastField<FBoolProperty>(Prop))
+		{
+			B->SetPropertyValue_InContainer(Target, Value != 0.0);
+			return true;
+		}
+		return false;
+	}
+
 	/**
 	 * Calls a Blueprint function on Target by name. Object parameters (inputs) get ObjectArg; returns the
 	 * first bool output (BP functions return through out-params) in bOutResult.
@@ -75,18 +98,83 @@ ARemoteHand::ARemoteHand()
 	GripPoint->SetAutoActivate(false); // never polls a device; follows this actor
 	GripPoint->bDisableLowLatencyUpdate = true;
 
-	Visual = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("Visual"));
-	Visual->SetupAttachment(Root);
-	Visual->SetRelativeScale3D(FVector(0.07f));
-	Visual->SetCollisionEnabled(ECollisionEnabled::NoCollision);
-	Visual->SetCastShadow(true);
-	static ConstructorHelpers::FObjectFinder<UStaticMesh> SphereMesh(TEXT("/Engine/BasicShapes/Sphere.Sphere"));
-	if (SphereMesh.Succeeded())
-	{
-		Visual->SetStaticMesh(SphereMesh.Object);
-	}
+	HandMesh = CreateDefaultSubobject<USkeletalMeshComponent>(TEXT("HandMesh"));
+	HandMesh->SetupAttachment(Root);
+	HandMesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+	HandMesh->SetCastShadow(true);
+	// Only the robot's scene captures render it, which may not count as "rendered" for the anim update.
+	HandMesh->VisibilityBasedAnimTickOption = EVisibilityBasedAnimTickOption::AlwaysTickPoseAndRefreshBones;
 
 	GrabComponentClass = TSoftClassPtr<USceneComponent>(FSoftObjectPath(TEXT("/Game/XRFramework/Blueprints/BP_GrabComponent.BP_GrabComponent_C")));
+	LeftHandMesh = TSoftObjectPtr<USkeletalMesh>(FSoftObjectPath(TEXT("/Game/XRMannequins/Meshes/SKM_MannyXR_left.SKM_MannyXR_left")));
+	RightHandMesh = TSoftObjectPtr<USkeletalMesh>(FSoftObjectPath(TEXT("/Game/XRMannequins/Meshes/SKM_MannyXR_right.SKM_MannyXR_right")));
+	HandAnimClass = TSoftClassPtr<UAnimInstance>(FSoftObjectPath(TEXT("/Game/XRMannequins/Meshes/ABP_MannequinsXR.ABP_MannequinsXR_C")));
+	HandMaterial = TSoftObjectPtr<UMaterialInterface>(FSoftObjectPath(TEXT("/Game/XRMannequins/Materials/Instances/Manny/MI_Manny_02.MI_Manny_02")));
+}
+
+bool ARemoteHand::ConfigureTemplateHand(USkeletalMeshComponent* Mesh, bool bLeft, UMaterialInterface* Material)
+{
+	const ARemoteHand* Defaults = GetDefault<ARemoteHand>();
+	const TSoftObjectPtr<USkeletalMesh>& MeshPath = bLeft ? Defaults->LeftHandMesh : Defaults->RightHandMesh;
+	USkeletalMesh* SkelMesh = MeshPath.LoadSynchronous();
+	UClass* AnimClass = Defaults->HandAnimClass.LoadSynchronous();
+	if (!Mesh || !SkelMesh || !AnimClass)
+	{
+		UE_LOG(LogTeleop, Warning, TEXT("RemoteHand: Template hand assets not found (%s, %s)"), *MeshPath.ToString(), *Defaults->HandAnimClass.ToString());
+		return false;
+	}
+	// Same placement on the grip as the Template's BP_XRPawn HandLeft / HandRight.
+	Mesh->SetRelativeLocationAndRotation(
+		FVector(-2.98126, bLeft ? -3.5 : 3.5, 4.561753),
+		bLeft ? FRotator(-25.0, -180.0, 90.0) : FRotator(25.0, 0.0, 90.0));
+	Mesh->SetSkeletalMesh(SkelMesh);
+	Mesh->SetAnimInstanceClass(AnimClass);
+	if (UMaterialInterface* M = Material ? Material : Defaults->HandMaterial.LoadSynchronous())
+	{
+		Mesh->SetMaterial(0, M);
+	}
+	return true;
+}
+
+bool ARemoteHand::ApplyFingers(UAnimInstance* Anim, const FTeleopFingerState& F, bool bLeft)
+{
+	// ABP_MannequinsXR reads bMirror from a BP_MannequinsXR component; ours are plain ones, so set it directly.
+	bool bOk = SetBlueprintNumber(Anim, TEXT("bMirror"), bLeft ? 1.0 : 0.0);
+	bOk &= SetBlueprintNumber(Anim, TEXT("PoseAlphaGrasp"), F.Grasp);
+	bOk &= SetBlueprintNumber(Anim, TEXT("PoseAlphaIndexCurl"), F.IndexCurl);
+	bOk &= SetBlueprintNumber(Anim, TEXT("PoseAlphaPoint"), F.Point);
+	bOk &= SetBlueprintNumber(Anim, TEXT("PoseAlphaThumbUp"), F.ThumbUp);
+	return bOk;
+}
+
+USceneComponent* ARemoteHand::GetGripPoint() const
+{
+	return GripPoint;
+}
+
+void ARemoteHand::SetupHandMesh()
+{
+	ConfigureTemplateHand(HandMesh, bLeft);
+}
+
+FTeleopFingerState ARemoteHand::UpdateFingers(double SampleTime)
+{
+	FTeleopFingerState F;
+	UAnimInstance* Anim = HandMesh->GetAnimInstance();
+	const ATeleopOperatorPawn* P = Pawn.Get();
+	if (!Anim || !P)
+	{
+		return F;
+	}
+	P->GetFingerHistory(bLeft).Sample(SampleTime, F);
+	F.Grasp = FMath::Max(F.Grasp, HeldComponent ? 1.f : 0.f);
+
+	if (!ApplyFingers(Anim, F, bLeft) && !bWarnedAnimVars)
+	{
+		bWarnedAnimVars = true;
+		UE_LOG(LogTeleop, Warning, TEXT("RemoteHand: %s lacks bMirror / PoseAlpha* variables; fingers stay idle"), *GetNameSafe(Anim->GetClass()));
+	}
+	return F;
 }
 
 void ARemoteHand::BeginPlay()
@@ -108,13 +196,7 @@ void ARemoteHand::Init(bool bInLeft, ATeleopGameMode* InGameMode, ATeleopOperato
 	// The Template's TryGrab picks the haptic hand from the motion source.
 	GripPoint->SetTrackingMotionSource(bLeft ? TEXT("LeftGrip") : TEXT("RightGrip"));
 
-	static const FSoftObjectPath HandMaterialPath(TEXT("/Game/Teleop/Materials/M_TeleopLitColor.M_TeleopLitColor"));
-	if (UMaterialInterface* Base = Cast<UMaterialInterface>(HandMaterialPath.TryLoad()))
-	{
-		UMaterialInstanceDynamic* MID = UMaterialInstanceDynamic::Create(Base, this);
-		MID->SetVectorParameterValue(TEXT("Color"), bLeft ? FLinearColor(0.1f, 0.35f, 1.f) : FLinearColor(1.f, 0.45f, 0.1f));
-		Visual->SetMaterial(0, MID);
-	}
+	SetupHandMesh();
 
 	if (InPawn)
 	{
@@ -164,6 +246,26 @@ void ARemoteHand::Tick(float DeltaSeconds)
 		PendingCommands.RemoveAt(0);
 		bPressed ? DoGrab() : DoRelease();
 	}
+	const bool bShowHand = TeleopCVars::DebugHideRobotHands.GetValueOnGameThread() == 0;
+	if (HandMesh->IsVisible() != bShowHand)
+	{
+		HandMesh->SetVisibility(bShowHand);
+		HandMesh->SetComponentTickEnabled(bShowHand);
+	}
+	const FTeleopFingerState Fingers = UpdateFingers(Now - CmdLatency);
+
+	const float LogEvery = TeleopCVars::DebugLogHandsSec.GetValueOnGameThread();
+	if (LogEvery > 0.f && Now - LastHandLogTime >= LogEvery)
+	{
+		LastHandLogTime = Now;
+		const FVector Hand = GripPoint->GetComponentLocation();
+		const USceneComponent* Near = FindNearestGrabComponent(100.f);
+		const FVector Delta = Near ? Near->GetComponentLocation() - Hand : FVector::ZeroVector;
+		UE_LOG(LogTeleop, Log, TEXT("[hand] %s at %s valid=%d held=%s nearest=%s delta=%s dist=%.1f fingers grasp=%.2f curl=%.2f point=%.0f thumb=%.0f"),
+			bLeft ? TEXT("L") : TEXT("R"), *Hand.ToCompactString(), bValid ? 1 : 0, *GetNameSafe(GetHeldActor()),
+			Near ? *GetNameSafe(Near->GetOwner()) : TEXT("none"), *Delta.ToCompactString(), Near ? Delta.Size() : -1.0,
+			Fingers.Grasp, Fingers.IndexCurl, Fingers.Point, Fingers.ThumbUp);
+	}
 }
 
 void ARemoteHand::QueueGrab(bool bPressed, double IssueTime)
@@ -172,7 +274,7 @@ void ARemoteHand::QueueGrab(bool bPressed, double IssueTime)
 	PendingCommands.Add({ IssueTime + Delay, bPressed });
 }
 
-USceneComponent* ARemoteHand::FindNearestGrabComponent() const
+USceneComponent* ARemoteHand::FindNearestGrabComponent(float Radius) const
 {
 	UWorld* World = GetWorld();
 	if (!World || !LoadedGrabClass)
@@ -184,7 +286,7 @@ USceneComponent* ARemoteHand::FindNearestGrabComponent() const
 	TArray<FOverlapResult> Overlaps;
 	FCollisionQueryParams Params(SCENE_QUERY_STAT(RemoteHandGrab), false, this);
 	World->OverlapMultiByObjectType(Overlaps, Center, FQuat::Identity, FCollisionObjectQueryParams::AllObjects,
-		FCollisionShape::MakeSphere(GrabRadius), Params);
+		FCollisionShape::MakeSphere(Radius), Params);
 
 	USceneComponent* Best = nullptr;
 	double BestDistSq = TNumericLimits<double>::Max();
@@ -221,9 +323,22 @@ bool ARemoteHand::DoGrab()
 	{
 		return false;
 	}
-	USceneComponent* Target = FindNearestGrabComponent();
+	USceneComponent* Target = FindNearestGrabComponent(GrabRadius);
 	if (!Target)
 	{
+		// Feedback for reaching: where the nearest grabbable is, relative to the hand.
+		const FVector Hand = GripPoint->GetComponentLocation();
+		if (const USceneComponent* Near = FindNearestGrabComponent(100.f))
+		{
+			const FVector Delta = Near->GetComponentLocation() - Hand;
+			UE_LOG(LogTeleop, Log, TEXT("%s hand grab missed: hand at %s, nearest %s %.1f cm away (delta %s)"),
+				bLeft ? TEXT("Left") : TEXT("Right"), *Hand.ToCompactString(), *GetNameSafe(Near->GetOwner()), Delta.Size(), *Delta.ToCompactString());
+		}
+		else
+		{
+			UE_LOG(LogTeleop, Log, TEXT("%s hand grab missed: hand at %s, nothing grabbable within 1 m"),
+				bLeft ? TEXT("Left") : TEXT("Right"), *Hand.ToCompactString());
+		}
 		return false;
 	}
 

@@ -24,12 +24,30 @@ imperfect depth, and lets the operator switch presentation/compensation methods 
     `ATeleopOperatorRoom` (closed dark box at (-100000, 0, 0)), and at the robot station (60, 0, 0) in the
     Template (40 cm in front of the desk) `ARobotHead`, two `ARemoteHand` and `ATeleopPresenter`. Owns
     `T_map` (remote = local * Calibration * Station; recenter keeps floor height 1:1) and `FTeleopLatencyModel`.
+    The calibrated eye height is the robot's camera height. Auto recenter (`FTeleopAutoRecenter`) waits for a
+    tracked, non-zero head pose at least 50 cm above the floor that stays valid for 0.5 s, and re-arms when the
+    headset is put on and on a system recenter. On Link the first poses are all zero, even with `IsTracking()` true.
   - `ATeleopOperatorPawn`: records HMD/controller poses (tracking frame) into `FTeleopPoseHistory`; GT moves
-    the whole pawn onto the station; world-locked HUD text with custom stencil 1.
-  - `ARemoteHand` (S1b): follows controller(t - L_cmd); delayed grab/release call the Template's
+    the whole pawn onto the station; world-locked HUD text with custom stencil 1. Robot camera marker
+    (`teleop.Debug.ShowRobotCamera`, default off; user request 2026-11-04): orange point + view frustum at the robot
+    camera rig now, mapped into the tracking frame (child of VROrigin, so right in the room and in GT), HUD stencil so
+    it shows over every method, hidden in scene captures. Unlit colour (0.35, 0.07, 0): the observer's (1, 0.45, 0.05)
+    saturates to yellow under the operator view's exposure.
+  - `ARemoteHand` (S1b): the robot hand. Follows controller(t - L_cmd); delayed grab/release call the Template's
     `BP_GrabComponent.TryGrab(MotionController)` / `TryRelease()`; adds the hand velocity on release (throw).
-  - `ARobotHead` (S2): neck (Fixed / Rot2DoF / Rot3DoF / Full6DoF, tau 40 ms, 300 deg/s, 2000 deg/s^2),
-    camera mount 10 cm fwd / 5 cm up, baseline b, stereo `SceneCapture2D` at f_cam into `UFrameRingBuffer`
+    Looks like the VR Template hand (`SKM_MannyXR_left/right` + `ABP_MannequinsXR`, BP_XRPawn's grip offsets; left =
+    mirror, set directly on the anim instance because the component is not a `BP_MannequinsXR`). The fingers play the
+    operator's grip / trigger / trigger-touch / thumb-touch (the Template's `IMC_Hands` keys), recorded by the pawn
+    in `FTeleopFingerHistory` and delayed by L_cmd; a held object keeps the grasp at 1. The robot has a hand, not a
+    gripper (user, 2026-11-04): do not go back to placeholder shapes.
+  - `ARobotHead` (S2): Base -> Waist -> NeckPivot -> CameraRig. Neck modes Fixed / Rot2DoF / Rot3DoF / Full6DoF /
+    **Waist3Neck2 (default)**; neck tau 40 ms, 300 deg/s, 2000 deg/s^2. Waist3Neck2 = the Sharpa robot (user,
+    2026-11-04: 2-DoF head on a 3-DoF body; HANDOFF §3 only mentions the 2-DoF neck): waist yaw/pitch/roll 55 cm below
+    the neck pivot (tau 150 ms, 90 deg/s, 600 deg/s^2, limits pitch +-30, roll +-20, yaw +-90) leans so the neck pivot
+    goes where the operator's neck is (eye target minus the camera mount; `TeleopMath::WaistLean`, test
+    `Teleop.Math.Waist`); waist yaw = `teleop.Waist.YawShare` (default 0) x head yaw. So it follows sideways/forward
+    head motion along a sphere around the waist, not height changes, and a sideways lean rolls the cameras.
+    Camera mount 10 cm fwd / 5 cm up, baseline b, stereo `SceneCapture2D` at f_cam into `UFrameRingBuffer`
     (24 slots x 2 eyes, RGBA16f: RGB scene color, A depth cm).
   - `UTeleopDepthDegrader` (S6, §5): per captured frame and eye, two material passes into the slot's R32f depth
     (capture res / K): block min/max, then fattening, edge holes (disparity jump between adjacent samples),
@@ -41,12 +59,29 @@ imperfect depth, and lets the operator switch presentation/compensation methods 
   - `ATeleopPresenter`: frame selection (newest with A_i <= now, jitter buffer max(A_i, C_i + recent p95), never
     older than shown) and all methods: M0 and M1/M2 in `M_TeleopPresent` (post process), M3 = procedural grid mesh
     (`M_TeleopDepthMesh`, WPO in the vertex shader, attached to the pawn's VROrigin = room frame), M4 = sphere +
-    mesh (mesh stencil 2 passes through the post process), GT = pawn moved to the station. M2 radius = median of
-    the shown frame's degraded depth in a central window (async GPU readback), smoothed 150 ms. Also HUD, blind test
+    mesh (mesh stencil 2 passes through the post process), GT = pawn moved to the station. M2 radius: per shown frame
+    the median of the degraded depth in a central window (async GPU readback); target = median of those over the last
+    `teleop.M2.WindowSec` (2 s), then eased with `teleop.M2.SmoothSec` (150 ms). HANDOFF only has the 150 ms smoothing;
+    the user found that followed every glance (2026-11-04). M4 uses the same R. Also HUD, blind test
     (`FTeleopBlindTest`), CSV logs (`FTeleopLogger`, Saved/TeleopLogs/<session>/), `teleop.ScreenshotPair`.
+  - `ATeleopObserver`: third-person view of the remote world for the PC window (recording, debugging); the HMD is
+    unchanged. In VR the spectator screen is split: observer left (`teleop.Observer.Split`), operator eye right
+    (`teleop.Observer` 1 split / 2 observer only / 0 off, leaving `vr.SpectatorScreenMode` alone). Scene capture at
+    `teleop.Observer.Hz` (30) sized to its window region, fixed manual exposure `teleop.Observer.Exposure` (auto
+    exposure adapted to the sky and left the robot black). Shows a grey robot body on the robot's joints, robot
+    camera frustum now (orange), capture pose of the frame on the HMD (yellow), the operator undelayed (green ghost
+    HMD + frustum + Template hands with current fingers), white gap lines (eye -> camera, ghost hand -> robot hand),
+    the operator HUD and a legend. Presets `teleop.Observer.View` / key V: behind-right 45 deg (default: robot
+    head + cameras, hands and desk objects in one frame), behind-left 45 deg, front-right over the desk, right side
+    (the user found the pure lateral view awkward), top. Overlays are `bVisibleInSceneCaptureOnly` and in the robot cameras' HiddenActors; they cast no
+    shadows. Text uses `M_TeleopTextUnlit` (the engine text material is lit). Without an HMD nothing is captured;
+    `DebugCaptureNow()` + `RenderingLibrary.export_render_target` for tests (the first capture after start may miss
+    translucency while shaders compile).
   - `ATeleopProps`: checkerboard (85 cm in front of the station, S5), 1 cm rods, sliding block, fan.
   - `TeleopMath.h` (`FTeleopPinhole`, ray-sphere) mirrors `Shaders/Teleop/Camera.ush`; tests `Teleop.Math.*`
     (`Automation RunTests Teleop.Math`).
+  - `TeleopOvrpLogFilter`: drops a known-harmless OVRPlugin error that floods the log on the simulator (XR runtime
+    section).
   - All tunables are `teleop.*` console variables in `TeleopCVars.cpp`; commands `teleop.Recenter`,
     `teleop.LatencyTest`, `teleop.ScreenshotPair`, `teleop.Blind.Toggle / Rate <d> / Confirm`.
 - `Source/ReprojectionShaders`: loads at PostConfigInit and maps `Reprojection/Shaders` to the virtual
@@ -57,10 +92,21 @@ imperfect depth, and lets the operator switch presentation/compensation methods 
   Change materials there, not by hand in the material editor. **Never run it during PIE** (editor asset
   functions refuse in PIE, and create_asset then blocks the editor with an "Overwrite Existing Object" dialog).
 - `Content/Python/teleop_tests.py`: PIE test helpers (proxy-hand grab/lift/throw on a Template cube).
-- Controls (HANDOFF §8, adapted so nothing collides with grabbing): A / X cycle M0>M1>M2>M3>M4>GT (blind: confirm);
-  B / Y latency preset; right stick X base latency -/+10 ms; right trigger jitter buffer; right stick Y blind rating;
+- Controls (HANDOFF §8, adapted so nothing collides with grabbing or the robot fingers): the session starts in GT and A
+  cycles GT>M1>M2>M3>M4>M0 (user, 2026-11-04: starting head-locked in M0 was unpleasant; `teleop.Method` values are
+  unchanged, 0 = M0 ... 5 = GT) (blind: confirm); B latency preset; X neck mode (Fixed > Rot2DoF > Rot3DoF > Full6DoF > Waist3+Neck2; keyboard N);
+  Y jitter buffer (keyboard J); right stick X base latency -/+10 ms; right stick Y blind rating during the blind
+  test, otherwise up or down toggles the robot camera marker (keyboard C);
   left stick click depth preset; left stick Y / X sphere R -/+10 cm, baseline -/+5 mm; left menu blind test;
-  right stick click or R recenter; grips grab. Debug: `teleop.EyeTest` 0/1/2, `teleop.Debug.Head*` (desktop).
+  right stick click or R recenter; grips grab. Grips, triggers and touch drive the robot fingers, so **never bind
+  a mode switch to a trigger**: on the Quest (2026-11-04), squeezing the triggers to curl the fingers cycled the neck
+  mode 10 times in 11 s (the analog axis re-fires a bool action on every small release) and kept toggling the
+  jitter buffer.
+  PC keyboard V: observer camera preset; C: robot camera marker. Debug: `teleop.EyeTest` 0/1/2, `teleop.Debug.Head*`
+  (desktop), `teleop.Debug.HideRobotHands`, `teleop.Debug.ShowRobotCamera`.
+  Every control logs an `[input]` line and every resulting change a `[control]` line; a grab that finds nothing
+  logs the nearest grabbable's offset; `teleop.Debug.LogHandsSec 0.5` logs remote hand positions and fingers
+  (`[hand]`), the head pose (`[head]`) and the robot's waist / neck angles and camera position (`[robot]`).
 - Shader conventions (`Shaders/Teleop/*.ush`): per-pixel eye dir from `ResolvedView.ClipToView` +
   `ViewToTranslatedWorld`; eye position = `DFHackToFloat(ResolvedView.WorldCameraOrigin) - RoomSeat`; room -> remote via
   MapX/Y/Z/T params; robot frames are already pre-exposed like the operator view (do not multiply by `PreExposure`;
@@ -91,9 +137,56 @@ imperfect depth, and lets the operator switch presentation/compensation methods 
 - Performance (Meta XR Simulator at 72 Hz, editor closed, `UnrealEditor.exe -game -vr`, OVRPlugin backend):
   plain Template 72.0 fps (GPU 4.6 ms); full rig with both robot cameras at 60 Hz 71.5 fps (min 69.5, GPU 5.1 ms);
   rig without cameras 72.0. The rig itself costs ~0.5 ms GPU per frame. The game thread mostly waits in WaitFrame.
+- Controllers (2026-11-04, simulated controllers on the Meta XR Simulator -> OpenXR -> Enhanced Input, left and right
+  separately): every control above fires its action; the left proxy hand was steered onto a Template cube with the
+  simulated controller, grabbed, lifted and released it; the blind test ran on buttons only (start, rate, blind.csv, stop).
+  This found a crash, now fixed: M2's GPU readback overflowed its staging texture when a depth preset change raised the
+  depth resolution (D3D12 E_INVALIDARG, fatal).
+- Quest 3 over Link (2026-11-04, VR Preview): all controls register, ~70 fps. The auto recenter fired on the all-zero
+  pose before tracking started, so the robot cameras sat on the floor: M0 showed the floor view, and M1-M4 reprojected
+  from 1.2 m below the eye (M2 radius 39 cm). Fixed (see `ATeleopGameMode`); `Teleop.Math.AutoRecenter` covers it.
+- Head translation in VR (2026-11-04, simulator headset moved 15-18 cm sideways, Ideal latency, DepthGT): M3 matches
+  GT (holes only behind objects), M1 shifts by t(1/d - 1/R) (background over-shifted at R = 1 m), M0 stays
+  head-locked. `Full6DoF` moves the robot cameras with the head (M0 then matches GT); `Rot2DoF` (default, HANDOFF §3)
+  does not translate. M4 as specified (sphere fills M3's holes) shows ghost duplicates of foreground objects in
+  disocclusion holes. The camera never saw the background there, so the sphere samples the occluder's colour at its
+  camera-view position. This is inherent to the sphere fill, not a coordinate bug.
+  Test helper: the focus click presses both triggers (left = neck mode), so start one mode early.
+- Waist3Neck2 and Template hands (2026-11-04). Desktop PIE, synthetic head offset, camera position in the station
+  frame vs the analytic chain: 15 cm right -> waist roll 15.26 deg, camera +15.79 right / -2.11 down (predicted
+  15.26 / 15.79 / -2.12); 20 cm forward -> pitch -19.98 deg, camera +18.80 / -3.31, camera stays level; 40 cm right ->
+  roll at the 20 deg limit; Rot2DoF / Full6DoF unchanged (0 / 15.00 cm). Simulator (OpenXR input): left trigger cycles
+  3 -> 4; grip -> both robot hands grasp 1.00 after L_cmd, release -> 0; right trigger -> right index curl 1.00 and
+  point 0, left unchanged; headset 15.3 cm right -> waist roll 15.5 deg, camera 16.1 cm right. Both Template hands
+  are visible in the robot frames (M0). The simulator sends no thumb-touch events, so thumb-up is untested.
+  Cost: `teleop.Debug.HideRobotHands` A/B, alternating runs: hidden 60.3 / 60.1 fps, visible 60.5 / 58.8 (noise).
+  That day the whole PC was slower: the plain Template baseline gave 59.8 fps (GPU 7.8 ms) instead of 72.0, with
+  `OVRServer_x64` (Link) and Task Manager running, so compare fps only within one session.
+  M3 with the waist (simulator, Ideal, DepthGT, headset 15.3 cm right): best-match shift vs GT 0 px in all regions
+  (Waist3Neck2 and Rot2DoF). The disocclusion holes (dark, object-shaped regions beside near objects; users call
+  them "shadows") stay with Rot2DoF and shrink as the waist catches up: mean |diff| vs GT beside the white box 31
+  (Rot2DoF), 19 (waist, right after the move), 6.6 (waist, settled). The rolled camera (sideways lean) shows as a
+  tilted frame edge; the content stays level. M3 renders the sky as a hole (dark), so auto exposure makes M3 a bit
+  brighter than GT (flat wall: mean |diff| ~4 at 0 px shift).
+- Observer view (2026-11-04, simulator, Bad latency): split screen applied at start, V cycles the presets; moving
+  the headset puts the green operator frustum ahead of the orange (robot now) and yellow (shown frame) ones, moving a
+  controller puts the green ghost hand ahead of the robot hand. Cost: alternating runs on 60.2 / 59.3 fps, off 63.2 /
+  64.6 (render thread bound that day). Use `teleop.Observer 0` (or a lower `teleop.Observer.Hz`) for fps-critical runs.
+  Test scripts that need both eyes on the spectator screen must pass `teleop.Observer 0` with `vr.SpectatorScreenMode 2`.
+- Robot camera marker (2026-11-04, desktop PIE, Rot2DoF, recentered, then head 30 cm back / 8 cm right): point 30 cm
+  ahead / 8 cm left with frustum and up tick, in M0, M3 (with the disocclusion holes of that offset) and GT. Enhanced
+  Input injection (`EnhancedInputLocalPlayerSubsystem.inject_input_vector_for_action` on the pawn's `IA_*` actions,
+  found with `unreal.find_object`): C and right stick flicks up / down toggle it; in the blind test the flick goes to the
+  rating. Desktop test gotchas: the auto recenter fires ~0.5 s after PIE start, so set head offsets after it; and
+  `teleop.Recenter` in the same script as an offset change still sees the old pose (poses are recorded on the next tick).
+- Start in GT and the A cycle GT > M1 > M2 > M3 > M4 > M0 > GT (2026-11-04, desktop PIE, injected A presses).
+  M2 window (desktop PIE, Ideal, DepthGT, display.csv `sphere_r_cm`): head yaw -30 -> 0 deg moves the centre from
+  the wall (R 509 cm) through the doorway (1440 cm). `teleop.M2.WindowSec 2`: R holds 509 for 1.25 s, 660 at 1.5 s,
+  1413 at 2 s; `WindowSec 0` (old behaviour): 616 at 0.2 s, 1326 at 0.5 s. Injected presses closer than a frame apart
+  merge into one (space them ~0.5 s).
 - How to measure: `teleop.Debug.QuitAfterSec N` exits cleanly; the module logs `[fps]` every 2 s (any game mode);
   the presenter logs `[stats]` (frame age + fps). Run-to-run spread on the simulator is +-3 fps; if a run hangs at
-  frame 0, restart `MetaXRSimulator.exe`. Plain Template baseline:
+  frame 0, restart `MetaXRSimulator.exe`. Make sure `synth_env_server.exe` is not running (see the XR runtime section). Plain Template baseline:
   `/Game/VRTemplate/VRTemplateMap?game=/Game/XRFramework/Blueprints/BP_XRGameMode.BP_XRGameMode_C`.
 
 ## XR runtime: Quest 3 or Meta XR Simulator
@@ -109,6 +202,27 @@ imperfect depth, and lets the operator switch presentation/compensation methods 
 - Headless check without a headset: run the game standalone, `UnrealEditor.exe <uproject> /Game/VRTemplate/VRTemplateMap
   -game -vr -windowed -ExecCmds="teleop.EyeTest 1, vr.SpectatorScreenMode 2"` with `XR_RUNTIME_JSON` set. Spectator
   mode 2 shows both eyes side by side in the game window. `-emulatestereo` (no runtime) also works for quick checks.
+- Simulated controllers from a script: the simulator's default key bindings (embedded in `SIMULATOR.dll`) are
+  W/S/A/D/R/F move the selected device (~1 m/s at movement speed 1.0), Y/H/G/J thumbstick, I stick click, B = A/X,
+  N = B/Y, T trigger, U grip, M menu, `]` cycles the selected device (both controllers -> headset -> left -> right).
+  With "Use same input for both sides" off, keys go to the selected device only. Keys only arrive when the viewport has
+  the simulator's internal keyboard focus (click it once; that click also presses the trigger). Posting WM_KEYDOWN /
+  WM_KEYUP to the window's `Microsoft.UI.Content.DesktopChildSiteBridge` child works without foreground focus, so a
+  test does not type into other windows. UI Automation reads the panel (device poses under "Input positioning"), but
+  each query takes ~50 s.
+- On every controller pose query, OculusXRInput asks OVRPlugin for the "detached controller" interaction profile.
+  The simulator lacks `XR_META_detached_controllers`, so each call fails with `XR_ERROR_PATH_INVALID` and OVRPlugin
+  logs it (~290 errors/s, ~9 MB of log per minute). `TeleopOvrpLogFilter` (module ticker) replaces OVRPlugin's log
+  callback and drops repeats of that one message (summary once a minute); `-NoOvrpLogFilter` disables it. The Meta
+  plugin logs through `GLog->CategorizedLogf`, so `log LogOVRPlugin off` does not work. A/B: no frame-rate effect
+  (70.5 vs 70.1 fps); only log size (0.2 vs 12.5 MB per 80 s).
+- The simulator starts `synth_env_server.exe` (synthetic environment for passthrough, "Bedroom") with its frontend.
+  This app does not use passthrough, and the server costs ~4.5 ms GPU: 48 fps with it vs 70.5 without. Stop it before
+  measuring (`Stop-Process -Name synth_env_server`); it is not restarted until the simulator frontend restarts.
+  **It also leaks memory**: left running after a simulator test (2026-11-04), it reached 29 GB committed in 1.5 h, the
+  PC had 0.7 GB RAM free, a later VR Preview on the Quest ran at 1-2 fps (GPU 240-660 ms per frame) and went black
+  (EndFrame4 -1006) with a memory-pressure warning. After every simulator test, stop both `synth_env_server` and
+  `MetaXRSimulator`.
 
 ## Driving the editor (MCP)
 

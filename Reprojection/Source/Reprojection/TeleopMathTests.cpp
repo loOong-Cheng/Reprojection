@@ -1,10 +1,11 @@
 #include "TeleopMath.h"
+#include "TeleopTypes.h"
 
 #include "Misc/AutomationTest.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
 
-// Project -> unproject round trip must be exact to < 0.1 mm (HANDOFF §7.2); we require < 0.001 mm.
+// Project -> unproject round trip must be exact to < 0.1 mm (HANDOFF Â§7.2); we require < 0.001 mm.
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FTeleopPinholeRoundTripTest, "Teleop.Math.PinholeRoundTrip",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 bool FTeleopPinholeRoundTripTest::RunTest(const FString& Parameters)
@@ -76,6 +77,95 @@ bool FTeleopRaySphereTest::RunTest(const FString& Parameters)
 	const FVector2D UV = C.Project(C.Pos + S * V, Z);
 	const FVector Back = (C.Unproject(UV, Z) - C.Pos).GetSafeNormal();
 	return TestTrue(TEXT("rotation exact"), Back.Equals(V, 1e-9));
+}
+
+// Auto recenter: never on the all-zero pose Link reports before tracking starts (that put the robot cameras on the
+// floor), nor below the minimum eye height; only after the pose stayed valid for SettleSeconds; again after Rearm().
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FTeleopAutoRecenterTest, "Teleop.Math.AutoRecenter",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FTeleopAutoRecenterTest::RunTest(const FString& Parameters)
+{
+	using EState = FTeleopAutoRecenter::EState;
+	const FTransform Zero = FTransform::Identity;
+	const FTransform Seated(FRotator(0, 20, 0), FVector(5, -3, 118));
+	const FTransform OnFloor(FRotator(0, 20, 0), FVector(5, -3, 8));
+
+	FTeleopAutoRecenter A;
+	double T = 0.0;
+	for (int32 i = 0; i < 100; ++i, T += 0.014)
+	{
+		// The Link case: IsTracking() true but the pose is all zero.
+		if (!TestFalse(TEXT("never on the zero pose"), A.Update(T, true, Zero)))
+		{
+			return false;
+		}
+	}
+	TestTrue(TEXT("waiting for tracking"), A.GetState() == EState::WaitingForTracking);
+	TestFalse(TEXT("not when untracked"), A.Update(T, false, Seated));
+	TestFalse(TEXT("not below the minimum height"), A.Update(T += 0.014, true, OnFloor));
+	TestTrue(TEXT("below min height"), A.GetState() == EState::BelowMinHeight);
+
+	// Valid from T0: fires once, after SettleSeconds.
+	const double T0 = T += 0.014;
+	bool bFired = false;
+	double FiredAt = -1.0;
+	for (; T < T0 + 2.0; T += 0.014)
+	{
+		if (A.Update(T, true, Seated))
+		{
+			TestFalse(TEXT("fires once"), bFired);
+			bFired = true;
+			FiredAt = T;
+		}
+	}
+	TestTrue(TEXT("fired"), bFired);
+	TestTrue(TEXT("after the settle time"), FiredAt - T0 >= A.SettleSeconds && FiredAt - T0 < A.SettleSeconds + 0.03);
+	TestTrue(TEXT("done"), A.GetState() == EState::Done);
+
+	// A tracking dropout during settling restarts the settle time.
+	FTeleopAutoRecenter B;
+	TestFalse(TEXT("settling"), B.Update(0.0, true, Seated));
+	TestFalse(TEXT("dropout"), B.Update(0.3, true, Zero));
+	TestFalse(TEXT("restart"), B.Update(0.31, true, Seated));
+	TestFalse(TEXT("not yet: settle restarted at 0.31"), B.Update(0.6, true, Seated));
+	TestTrue(TEXT("fires 0.5 s after the restart"), B.Update(0.81, true, Seated));
+
+	// Rearm (headset put on, system recenter): fires again.
+	A.Rearm();
+	TestFalse(TEXT("rearmed, settling"), A.Update(10.0, true, Seated));
+	TestTrue(TEXT("rearmed, fires"), A.Update(10.6, true, Seated));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FTeleopWaistTest, "Teleop.Math.Waist",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FTeleopWaistTest::RunTest(const FString& Parameters)
+{
+	const double L = 55.0;
+
+	// Signs: leaning toward +X / +Y moves the neck forward / right and keeps it above the waist.
+	const FVector Fwd = TeleopMath::WaistNeckPosition(TeleopMath::WaistLean(FVector(20, 0, 50), 0.0), L);
+	const FVector Right = TeleopMath::WaistNeckPosition(TeleopMath::WaistLean(FVector(0, 20, 50), 0.0), L);
+	TestTrue(TEXT("lean forward"), Fwd.X > 15.0 && FMath::Abs(Fwd.Y) < 1e-6 && Fwd.Z > 0.0);
+	TestTrue(TEXT("lean right"), Right.Y > 15.0 && FMath::Abs(Right.X) < 1e-6 && Right.Z > 0.0);
+	TestTrue(TEXT("upright"), TeleopMath::WaistLean(FVector(0, 0, 40), 0.0).IsNearlyZero(1e-9));
+
+	// Round trip: the solved lean points the torso at the target for any waist yaw (error < 0.1 mm at the neck).
+	FRandomStream Rng(42);
+	double MaxErr = 0.0;
+	for (int32 i = 0; i < 2000; ++i)
+	{
+		const FVector Target(Rng.FRandRange(-40.0, 40.0), Rng.FRandRange(-40.0, 40.0), Rng.FRandRange(20.0, 70.0));
+		const double Yaw = Rng.FRandRange(-90.0, 90.0);
+		const FRotator W = TeleopMath::WaistLean(Target, Yaw);
+		MaxErr = FMath::Max(MaxErr, (TeleopMath::WaistNeckPosition(W, L) - Target.GetSafeNormal() * L).Size());
+		if (!TestTrue(TEXT("yaw kept"), FMath::IsNearlyEqual(W.Yaw, Yaw, 1e-9)))
+		{
+			return false;
+		}
+	}
+	TestTrue(FString::Printf(TEXT("round trip error %.2e cm < 0.01 cm"), MaxErr), MaxErr < 0.01);
+	return true;
 }
 
 #endif // WITH_DEV_AUTOMATION_TESTS

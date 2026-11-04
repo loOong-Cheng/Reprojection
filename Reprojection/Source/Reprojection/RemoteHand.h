@@ -7,14 +7,21 @@
 
 class ATeleopGameMode;
 class ATeleopOperatorPawn;
+class UAnimInstance;
+class UMaterialInterface;
 class UMotionControllerComponent;
-class UStaticMeshComponent;
+class USkeletalMesh;
+class USkeletalMeshComponent;
 
 /**
- * Proxy hand in the remote world (HANDOFF §1 change 2, S1b). Follows T_map * controller pose (t - L_cmd).
+ * Robot hand in the remote world (HANDOFF §1 change 2, S1b). Follows T_map * controller pose (t - L_cmd).
  * Grab/release commands are delayed by the same command latency and then run the Template's own grab logic:
  * find the nearest BP_GrabComponent within GrabRadius and call its TryGrab(MotionController) / TryRelease().
  * The operator only sees the result through the delayed robot camera, so interaction latency comes for free.
+ *
+ * Looks like the VR Template's hand (SKM_MannyXR + ABP_MannequinsXR, same offset from the grip as in BP_XRPawn,
+ * left = mirrored). The fingers play the operator's grip / trigger / touch inputs, delayed by L_cmd; a held object
+ * keeps the hand closed.
  *
  * GripPoint is a UMotionControllerComponent because TryGrab expects one; it is deactivated (never tracks a
  * device) and simply follows this actor.
@@ -56,6 +63,18 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Teleop")
 	bool IsLeft() const { return bLeft; }
 
+	/** The grip point (what TryGrab holds on to); follows the delayed controller pose. */
+	USceneComponent* GetGripPoint() const;
+
+	/**
+	 * Makes Mesh a VR Template hand (mesh, animation, BP_XRPawn's offset from the grip; asset paths from this class's
+	 * defaults). Material overrides the Template material if given. False if the assets are missing.
+	 */
+	static bool ConfigureTemplateHand(USkeletalMeshComponent* Mesh, bool bLeft, UMaterialInterface* Material = nullptr);
+
+	/** Plays finger controls on a Template hand's anim instance. False if it lacks the ABP_MannequinsXR variables. */
+	static bool ApplyFingers(UAnimInstance* Anim, const FTeleopFingerState& Fingers, bool bLeft);
+
 protected:
 	virtual void BeginPlay() override;
 
@@ -65,9 +84,21 @@ protected:
 	UPROPERTY(VisibleAnywhere, Category = "Teleop")
 	TObjectPtr<UMotionControllerComponent> GripPoint;
 
-	/** Placeholder robot gripper, visible to the robot cameras. */
+	/** The robot hand the robot cameras see (VR Template hand). */
 	UPROPERTY(VisibleAnywhere, Category = "Teleop")
-	TObjectPtr<UStaticMeshComponent> Visual;
+	TObjectPtr<USkeletalMeshComponent> HandMesh;
+
+	UPROPERTY(EditAnywhere, Category = "Teleop|Hand")
+	TSoftObjectPtr<USkeletalMesh> LeftHandMesh;
+
+	UPROPERTY(EditAnywhere, Category = "Teleop|Hand")
+	TSoftObjectPtr<USkeletalMesh> RightHandMesh;
+
+	UPROPERTY(EditAnywhere, Category = "Teleop|Hand")
+	TSoftClassPtr<UAnimInstance> HandAnimClass;
+
+	UPROPERTY(EditAnywhere, Category = "Teleop|Hand")
+	TSoftObjectPtr<UMaterialInterface> HandMaterial;
 
 	/** Same as the Template pawn's GrabRadiusFromGripPosition. */
 	UPROPERTY(EditAnywhere, Category = "Teleop")
@@ -83,7 +114,10 @@ protected:
 private:
 	bool DoGrab();
 	bool DoRelease();
-	USceneComponent* FindNearestGrabComponent() const;
+	USceneComponent* FindNearestGrabComponent(float Radius) const;
+	void SetupHandMesh();
+	/** Plays the operator's finger controls at SampleTime on the hand; returns what was applied. */
+	FTeleopFingerState UpdateFingers(double SampleTime);
 
 	bool bLeft = false;
 	TWeakObjectPtr<ATeleopGameMode> GameMode;
@@ -107,4 +141,7 @@ private:
 
 	bool bHasPoseOverride = false;
 	FTransform PoseOverride;
+
+	double LastHandLogTime = 0.0;
+	bool bWarnedAnimVars = false;
 };

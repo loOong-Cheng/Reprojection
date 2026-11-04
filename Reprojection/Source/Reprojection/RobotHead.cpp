@@ -6,6 +6,7 @@
 #include "TeleopDepthDegrader.h"
 #include "TeleopGameMode.h"
 #include "TeleopLogger.h"
+#include "TeleopMath.h"
 #include "TeleopOperatorPawn.h"
 
 #include "Components/SceneCaptureComponent2D.h"
@@ -47,8 +48,11 @@ ARobotHead::ARobotHead()
 	Base = CreateDefaultSubobject<USceneComponent>(TEXT("Base"));
 	RootComponent = Base;
 
+	Waist = CreateDefaultSubobject<USceneComponent>(TEXT("Waist"));
+	Waist->SetupAttachment(Base);
+
 	NeckPivot = CreateDefaultSubobject<USceneComponent>(TEXT("NeckPivot"));
-	NeckPivot->SetupAttachment(Base);
+	NeckPivot->SetupAttachment(Waist);
 
 	CameraRig = CreateDefaultSubobject<USceneComponent>(TEXT("CameraRig"));
 	CameraRig->SetupAttachment(NeckPivot);
@@ -90,6 +94,12 @@ void ARobotHead::Init(ATeleopGameMode* InGameMode, ATeleopOperatorPawn* InPawn)
 	}
 }
 
+void ARobotHead::HideFromRobotCameras(AActor* Actor)
+{
+	CameraLeft->HiddenActors.AddUnique(Actor);
+	CameraRight->HiddenActors.AddUnique(Actor);
+}
+
 void ARobotHead::Tick(float DeltaSeconds)
 {
 	Super::Tick(DeltaSeconds);
@@ -97,6 +107,16 @@ void ARobotHead::Tick(float DeltaSeconds)
 	const double Now = FPlatformTime::Seconds();
 	UpdateNeck(Now, DeltaSeconds);
 	UpdateCameraRig();
+
+	const float LogEvery = TeleopCVars::DebugLogHandsSec.GetValueOnGameThread();
+	if (LogEvery > 0.f && Now - LastRobotLogTime >= LogEvery)
+	{
+		LastRobotLogTime = Now;
+		const FVector Cam = Base->GetComponentTransform().InverseTransformPosition(CameraRig->GetComponentLocation());
+		UE_LOG(LogTeleop, Log, TEXT("[robot] waist p%.1f y%.1f r%.1f neck p%.1f y%.1f r%.1f camera %s (station frame)"),
+			WaistRotation.Pitch, WaistRotation.Yaw, WaistRotation.Roll, NeckRotation.Pitch, NeckRotation.Yaw, NeckRotation.Roll,
+			*Cam.ToCompactString());
+	}
 
 	const double Period = 1.0 / FMath::Clamp(TeleopCVars::CamHz.GetValueOnGameThread(), 1.f, 240.f);
 	if (NextCaptureTime <= 0.0 || NextCaptureTime < Now - Period)
@@ -143,39 +163,66 @@ void ARobotHead::UpdateNeck(double Now, float DeltaSeconds)
 
 	if (!bNeckInitialized)
 	{
+		WaistRotation = FRotator::ZeroRotator;
+		WaistRate = FVector::ZeroVector;
 		NeckRotation = FRotator::ZeroRotator;
 		NeckRate = FVector::ZeroVector;
-		PivotLocation = NominalPivot;
+		PivotOffset = FVector::ZeroVector;
 		bNeckInitialized = true;
 	}
 
-	const ETeleopNeckMode Mode = static_cast<ETeleopNeckMode>(FMath::Clamp(TeleopCVars::NeckMode.GetValueOnGameThread(), 0, 3));
+	const ETeleopNeckMode Mode = static_cast<ETeleopNeckMode>(FMath::Clamp(TeleopCVars::NeckMode.GetValueOnGameThread(), 0, 4));
 	const double Dt = FMath::Clamp<double>(DeltaSeconds, 1e-4, 0.1);
 
+	// Waist: leans so the neck pivot goes where the operator's neck is (eye target minus the camera mount). Upright
+	// in the other modes, which then behave exactly as without a waist.
+	const FVector WaistPivot = NominalPivot - FVector(0.0, 0.0, WaistToNeckCm);
+	FRotator WaistTarget = FRotator::ZeroRotator;
+	if (Mode == ETeleopNeckMode::Waist3Neck2)
+	{
+		const double YawShare = FMath::Clamp(TeleopCVars::WaistYawShare.GetValueOnGameThread(), 0.f, 1.f);
+		const double WaistYaw = FMath::Clamp(YawShare * TargetRot.Yaw, -WaistYawLimitDeg, WaistYawLimitDeg);
+		const FVector NeckTarget = TargetRel.GetLocation() - TargetRel.GetRotation().RotateVector(Mount);
+		WaistTarget = TeleopMath::WaistLean(NeckTarget - WaistPivot, WaistYaw);
+		WaistTarget.Pitch = FMath::Clamp(WaistTarget.Pitch, -WaistPitchLimitDeg, WaistPitchLimitDeg);
+		WaistTarget.Roll = FMath::Clamp(WaistTarget.Roll, -WaistRollLimitDeg, WaistRollLimitDeg);
+	}
+	{
+		double Pitch = WaistRotation.Pitch, Yaw = WaistRotation.Yaw, Roll = WaistRotation.Roll;
+		TrackAngle(Yaw, WaistRate.Y, WaistTarget.Yaw, WaistTauSeconds, WaistMaxRateDegPerSec, WaistMaxAccelDegPerSec2, Dt);
+		TrackAngle(Pitch, WaistRate.X, WaistTarget.Pitch, WaistTauSeconds, WaistMaxRateDegPerSec, WaistMaxAccelDegPerSec2, Dt);
+		TrackAngle(Roll, WaistRate.Z, WaistTarget.Roll, WaistTauSeconds, WaistMaxRateDegPerSec, WaistMaxAccelDegPerSec2, Dt);
+		WaistRotation = FRotator(Pitch, Yaw, Roll);
+	}
+
+	// Neck, relative to the torso: points the cameras where the head looks, whatever the waist is doing.
+	const FRotator NeckTargetRot = (WaistRotation.Quaternion().Inverse() * TargetRel.GetRotation()).Rotator();
 	double Pitch = NeckRotation.Pitch, Yaw = NeckRotation.Yaw, Roll = NeckRotation.Roll;
 	double PitchRate = NeckRate.X, YawRate = NeckRate.Y, RollRate = NeckRate.Z;
 
 	const bool bRotates = Mode != ETeleopNeckMode::Fixed;
 	const bool bRolls = Mode == ETeleopNeckMode::Rot3DoF || Mode == ETeleopNeckMode::Full6DoF;
-	TrackAngle(Yaw, YawRate, bRotates ? TargetRot.Yaw : 0.0, TauSeconds, MaxRateDegPerSec, MaxAccelDegPerSec2, Dt);
-	TrackAngle(Pitch, PitchRate, bRotates ? TargetRot.Pitch : 0.0, TauSeconds, MaxRateDegPerSec, MaxAccelDegPerSec2, Dt);
-	TrackAngle(Roll, RollRate, bRolls ? TargetRot.Roll : 0.0, TauSeconds, MaxRateDegPerSec, MaxAccelDegPerSec2, Dt);
+	TrackAngle(Yaw, YawRate, bRotates ? NeckTargetRot.Yaw : 0.0, TauSeconds, MaxRateDegPerSec, MaxAccelDegPerSec2, Dt);
+	TrackAngle(Pitch, PitchRate, bRotates ? NeckTargetRot.Pitch : 0.0, TauSeconds, MaxRateDegPerSec, MaxAccelDegPerSec2, Dt);
+	TrackAngle(Roll, RollRate, bRolls ? NeckTargetRot.Roll : 0.0, TauSeconds, MaxRateDegPerSec, MaxAccelDegPerSec2, Dt);
 
 	NeckRotation = FRotator(Pitch, Yaw, Roll);
 	NeckRate = FVector(PitchRate, YawRate, RollRate);
 
-	FVector PivotTarget = NominalPivot;
+	FVector OffsetTarget = FVector::ZeroVector;
 	if (Mode == ETeleopNeckMode::Full6DoF)
 	{
-		// Put the camera rig where the operator's eyes are, within the workspace.
-		PivotTarget = TargetRel.GetLocation() - NeckRotation.RotateVector(Mount);
-		PivotTarget = NominalPivot + (PivotTarget - NominalPivot).BoundToBox(-WorkspaceHalfExtent, WorkspaceHalfExtent);
+		// Put the camera rig where the operator's eyes are, within the workspace (torso frame).
+		const FVector EyeInTorso = WaistRotation.UnrotateVector(TargetRel.GetLocation() - WaistPivot);
+		OffsetTarget = (EyeInTorso - FVector(0.0, 0.0, WaistToNeckCm) - NeckRotation.RotateVector(Mount))
+			.BoundToBox(-WorkspaceHalfExtent, WorkspaceHalfExtent);
 	}
-	FVector Velocity = (PivotTarget - PivotLocation) / FMath::Max<double>(TauSeconds, 1e-3);
+	FVector Velocity = (OffsetTarget - PivotOffset) / FMath::Max<double>(TauSeconds, 1e-3);
 	Velocity = Velocity.GetClampedToMaxSize(MaxSpeedCmPerSec);
-	PivotLocation += Velocity * Dt;
+	PivotOffset += Velocity * Dt;
 
-	NeckPivot->SetRelativeLocationAndRotation(PivotLocation, NeckRotation);
+	Waist->SetRelativeLocationAndRotation(WaistPivot, WaistRotation);
+	NeckPivot->SetRelativeLocationAndRotation(FVector(0.0, 0.0, WaistToNeckCm) + PivotOffset, NeckRotation);
 }
 
 void ARobotHead::UpdateCameraRig()

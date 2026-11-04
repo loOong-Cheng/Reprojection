@@ -3,6 +3,7 @@
 #include "Reprojection.h"
 
 #include "TeleopCVars.h"
+#include "TeleopOvrpLogFilter.h"
 
 #include "Containers/Ticker.h"
 #include "CoreGlobals.h"
@@ -14,8 +15,9 @@
 DEFINE_LOG_CATEGORY(LogTeleop);
 
 /**
- * Primary game module. Besides the default behavior it runs a core ticker for test automation:
- * teleop.Debug.QuitAfterSec exits the process cleanly (so traces/logs are flushed), independent of the game mode.
+ * Primary game module. Besides the default behavior it runs a core ticker: [fps] log, test automation
+ * (teleop.Debug.QuitAfterSec exits cleanly so traces/logs are flushed, independent of the game mode), and the
+ * OVRPlugin log filter (TeleopOvrpLogFilter.h).
  */
 class FReprojectionModule : public FDefaultGameModuleImpl
 {
@@ -36,6 +38,12 @@ private:
 	{
 		// Game-mode independent frame-rate log (also works with the plain Template game mode).
 		const double Now = FPlatformTime::Seconds();
+		TeleopOvrpLogFilter::TryInstall();
+		if (Now - LastFilterReport >= 60.0)
+		{
+			LastFilterReport = Now;
+			TeleopOvrpLogFilter::ReportSuppressed();
+		}
 		if (Now - FpsWindowStart >= 2.0)
 		{
 			if (FpsWindowStart > 0.0)
@@ -61,6 +69,7 @@ private:
 	bool bQuitRequested = false;
 	double FpsWindowStart = 0.0;
 	uint64 FpsWindowFrame = 0;
+	double LastFilterReport = 0.0;
 	FTSTicker::FDelegateHandle TickerHandle;
 };
 

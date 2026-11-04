@@ -98,6 +98,52 @@ def build_lit_color():
     _finish(mat)
 
 
+def build_ghost():
+    """M_TeleopGhost: translucent unlit with a Fresnel rim; 'Color' (vector), 'Opacity' (scalar). The observer view's
+    ghosts (operator head and hands, undelayed); used on static and skeletal meshes."""
+    mat = _new_material("M_TeleopGhost")
+    mat.set_editor_property("shading_model", unreal.MaterialShadingModel.MSM_UNLIT)
+    mat.set_editor_property("blend_mode", unreal.BlendMode.BLEND_TRANSLUCENT)
+    mat.set_editor_property("used_with_skeletal_mesh", True)
+    color = _expr(mat, unreal.MaterialExpressionVectorParameter, -700, -100)
+    color.set_editor_property("parameter_name", "Color")
+    color.set_editor_property("default_value", unreal.LinearColor(0.1, 1.0, 0.3, 1.0))
+    opacity = _expr(mat, unreal.MaterialExpressionScalarParameter, -700, 200)
+    opacity.set_editor_property("parameter_name", "Opacity")
+    opacity.set_editor_property("default_value", 0.35)
+    fresnel = _expr(mat, unreal.MaterialExpressionFresnel, -700, 50)
+    rim = _expr(mat, unreal.MaterialExpressionAdd, -450, 0)
+    rim.set_editor_property("const_b", 0.5)
+    _connect(fresnel, "", rim, ["A"])
+    emissive = _expr(mat, unreal.MaterialExpressionMultiply, -250, -50)
+    _connect(color, "", emissive, ["A"])
+    _connect(rim, "", emissive, ["B"])
+    MEL.connect_material_property(emissive, "", unreal.MaterialProperty.MP_EMISSIVE_COLOR)
+    rim_alpha = _expr(mat, unreal.MaterialExpressionAdd, -450, 150)
+    rim_alpha.set_editor_property("const_b", 0.6)
+    _connect(fresnel, "", rim_alpha, ["A"])
+    alpha = _expr(mat, unreal.MaterialExpressionMultiply, -250, 200)
+    _connect(opacity, "", alpha, ["A"])
+    _connect(rim_alpha, "", alpha, ["B"])
+    MEL.connect_material_property(alpha, "", unreal.MaterialProperty.MP_OPACITY)
+    _finish(mat)
+
+
+def build_text_unlit():
+    """M_TeleopTextUnlit: the engine's DefaultTextMaterialOpaque (vertex colour, masked by the font) made unlit, so the
+    observer view's text keeps its colour whatever the scene lighting (the engine one is default lit)."""
+    if unreal.get_editor_subsystem(unreal.UnrealEditorSubsystem).get_game_world() is not None:
+        raise RuntimeError("Stop Play-In-Editor before building materials.")
+    path = f"{FOLDER}/M_TeleopTextUnlit"
+    if EAL.does_asset_exist(path):
+        EAL.delete_asset(path)
+    mat = EAL.duplicate_asset("/Engine/EngineMaterials/DefaultTextMaterialOpaque", path)
+    mat.set_editor_property("shading_model", unreal.MaterialShadingModel.MSM_UNLIT)
+    vertex_color = MEL.get_material_property_input_node(mat, unreal.MaterialProperty.MP_BASE_COLOR)
+    MEL.connect_material_property(vertex_color, "", unreal.MaterialProperty.MP_EMISSIVE_COLOR)
+    _finish(mat)
+
+
 def build_eye_test_pp():
     """M_EyeTest_PP: post process after tonemapping, left eye red / right eye green (pixel stage)."""
     mat = _new_material("M_EyeTest_PP")
@@ -382,6 +428,8 @@ def build_all():
         EAL.make_directory(FOLDER)
     build_unlit_color()
     build_lit_color()
+    build_ghost()
+    build_text_unlit()
     build_eye_test_pp()
     build_eye_test_vertex()
     build_present()
@@ -392,7 +440,7 @@ def build_all():
 
 def report():
     """Print shader instruction counts (non-zero = compiled) for all Teleop materials."""
-    for name in ("M_TeleopUnlitColor", "M_TeleopLitColor", "M_EyeTest_PP", "M_EyeTest_Vertex", "M_TeleopPresent", "M_TeleopDepthMesh",
+    for name in ("M_TeleopUnlitColor", "M_TeleopLitColor", "M_TeleopGhost", "M_TeleopTextUnlit", "M_EyeTest_PP", "M_EyeTest_Vertex", "M_TeleopPresent", "M_TeleopDepthMesh",
                  "M_TeleopDepthMinMax", "M_TeleopDepthDegrade", "M_TeleopCopyR", "M_TeleopChecker"):
         m = EAL.load_asset(f"{FOLDER}/{name}")
         if not m:

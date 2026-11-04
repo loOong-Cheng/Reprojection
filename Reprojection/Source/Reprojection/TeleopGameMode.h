@@ -4,11 +4,13 @@
 #include "GameFramework/GameModeBase.h"
 #include "TeleopLatencyModel.h"
 #include "TeleopLogger.h"
+#include "TeleopTypes.h"
 #include "TeleopGameMode.generated.h"
 
 class ARemoteHand;
 class ARobotHead;
 class ATeleopOperatorPawn;
+class ATeleopObserver;
 class ATeleopOperatorRoom;
 class ATeleopPresenter;
 class ATeleopProps;
@@ -30,11 +32,18 @@ public:
 
 	virtual AActor* FindPlayerStart_Implementation(AController* Player, const FString& IncomingName) override;
 	virtual void RestartPlayer(AController* NewPlayer) override;
+	virtual void BeginPlay() override;
+	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 	virtual void Tick(float DeltaSeconds) override;
 
-	/** Maps the operator's current head (yaw, and floor position) onto the robot station. Keeps floor height (1:1). */
+	/** Maps the operator's current head (yaw, and floor position) onto the robot station. Keeps floor height (1:1).
+	 *  Ignored while the head is not tracked. Runs automatically once tracking is valid (FTeleopAutoRecenter), again
+	 *  after the headset is put on and after a system recenter. */
 	UFUNCTION(BlueprintCallable, Category = "Teleop")
 	void Recenter();
+
+	/** HUD line while no valid calibration exists (empty when calibrated). */
+	FString GetCalibrationWarning() const;
 
 	/** Operator tracking frame -> remote world (remote = local * T_map). */
 	FTransform GetLocalToRemote() const { return Calibration * GetStationTransform(); }
@@ -63,6 +72,10 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Teleop")
 	ARemoteHand* GetRemoteHand(bool bLeft) const { return bLeft ? LeftHand : RightHand; }
 
+	/** Third-person observer view for the PC window. */
+	UFUNCTION(BlueprintPure, Category = "Teleop")
+	ATeleopObserver* GetObserver() const { return Observer; }
+
 	/** Where the operator room is spawned when the level has none, cm (about 1 km from the Template scene). */
 	UPROPERTY(EditDefaultsOnly, Category = "Teleop")
 	FVector OperatorRoomLocation = FVector(-100000.f, 0.f, 0.f);
@@ -86,11 +99,17 @@ private:
 	UPROPERTY(Transient) TObjectPtr<ARemoteHand> RightHand;
 	UPROPERTY(Transient) TObjectPtr<ATeleopPresenter> Presenter;
 	UPROPERTY(Transient) TObjectPtr<ATeleopProps> Props;
+	UPROPERTY(Transient) TObjectPtr<ATeleopObserver> Observer;
 
 	FTeleopLatencyModel LatencyModel;
 	TUniquePtr<FTeleopLogger> Logger;
 
+	void RearmAutoRecenter(const TCHAR* Reason);
+
 	FTransform Calibration = FTransform::Identity;
 	float CalibratedEyeHeight = 120.f;
 	bool bCalibrated = false;
+	FTeleopAutoRecenter AutoRecenter;
+	FDelegateHandle PutOnHeadHandle;
+	FDelegateHandle SystemRecenterHandle;
 };

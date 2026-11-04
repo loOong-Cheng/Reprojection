@@ -5,9 +5,10 @@ namespace TeleopCVars
 	// --- Presentation -------------------------------------------------------------------------------------
 
 	TAutoConsoleVariable<int32> Method(
-		TEXT("teleop.Method"), 0,
+		TEXT("teleop.Method"), 5,
 		TEXT("Presentation method (HANDOFF §6): 0 = M0 naive head-locked, 1 = M1 sphere (fixed R), 2 = M2 sphere (adaptive R),\n")
-		TEXT("3 = M3 depth mesh, 4 = M4 hybrid (sphere + mesh), 5 = GT. A / X cycles."),
+		TEXT("3 = M3 depth mesh, 4 = M4 hybrid (sphere + mesh), 5 = GT. Starts in GT; A cycles GT > M1 > M2 > M3 > M4 > M0 > GT\n")
+		TEXT("(user, 2026-11-04: starting in the head-locked M0 was unpleasant)."),
 		ECVF_Default);
 
 	TAutoConsoleVariable<float> SphereRadiusCm(
@@ -15,9 +16,16 @@ namespace TeleopCVars
 		TEXT("M1 sphere radius R, cm (HANDOFF §6: default 1 m). Left stick Y adjusts."),
 		ECVF_Default);
 
+	TAutoConsoleVariable<float> M2WindowSec(
+		TEXT("teleop.M2.WindowSec"), 2.f,
+		TEXT("M2: the radius target is the median of the per-frame depth medians of the last this many seconds, s\n")
+		TEXT("(user, 2026-11-04: HANDOFF's 150 ms smoothing alone followed every glance; 2 s keeps R on what you look at)."),
+		ECVF_Default);
+
 	TAutoConsoleVariable<float> M2SmoothSec(
 		TEXT("teleop.M2.SmoothSec"), 0.15f,
-		TEXT("M2: time constant of the adaptive radius smoothing, s (HANDOFF §6: ~150 ms)."),
+		TEXT("M2: R eases toward the window median with this time constant, s (removes the step when the majority of the\n")
+		TEXT("window changes depth)."),
 		ECVF_Default);
 
 	TAutoConsoleVariable<float> M2WindowFrac(
@@ -47,7 +55,7 @@ namespace TeleopCVars
 	TAutoConsoleVariable<int32> LatencyPreset(
 		TEXT("teleop.LatencyPreset"), 2,
 		TEXT("Latency preset (HANDOFF §4): 0 = Ideal, 1 = LAN, 2 = WiFi, 3 = Remote, 4 = Bad, 5 = Constant (teleop.LatencyMs, no loss).\n")
-		TEXT("B / Y cycles 0-4."),
+		TEXT("B cycles 0-4."),
 		ECVF_Default);
 
 	TAutoConsoleVariable<float> LatencyBaseOffsetMs(
@@ -58,7 +66,7 @@ namespace TeleopCVars
 	TAutoConsoleVariable<int32> JitterBuffer(
 		TEXT("teleop.JitterBuffer"), 0,
 		TEXT("1 = jitter buffer: frame i is shown at max(A_i, C_i + D_target), D_target = recent p95 latency (HANDOFF §4).\n")
-		TEXT("Right trigger toggles."),
+		TEXT("Y toggles."),
 		ECVF_Default);
 
 	TAutoConsoleVariable<float> LatencyMs(
@@ -97,8 +105,14 @@ namespace TeleopCVars
 		ECVF_Default);
 
 	TAutoConsoleVariable<int32> NeckMode(
-		TEXT("teleop.NeckMode"), 1,
-		TEXT("Robot neck (HANDOFF §3): 0 = Fixed, 1 = Rot2DoF (yaw+pitch, default), 2 = Rot3DoF, 3 = Full6DoF."),
+		TEXT("teleop.NeckMode"), 4,
+		TEXT("Robot neck (HANDOFF §3): 0 = Fixed, 1 = Rot2DoF (yaw+pitch), 2 = Rot3DoF, 3 = Full6DoF, ")
+		TEXT("4 = Waist3Neck2 (default: 3-DoF waist leaning to follow head translation + 2-DoF neck, as on Sharpa)."),
+		ECVF_Default);
+
+	TAutoConsoleVariable<float> WaistYawShare(
+		TEXT("teleop.Waist.YawShare"), 0.f,
+		TEXT("Waist3Neck2: share of the head yaw the waist takes (0..1); the neck turns the rest. 0 = torso faces forward."),
 		ECVF_Default);
 
 	// --- Study tools --------------------------------------------------------------------------------------
@@ -140,6 +154,46 @@ namespace TeleopCVars
 	TAutoConsoleVariable<float> DebugProfileGPUAfterSec(
 		TEXT("teleop.Debug.ProfileGPUAfterSec"), 0.f,
 		TEXT("If > 0: run ProfileGPU once, this many seconds after the session starts (dumps per-pass GPU timings to the log)."),
+		ECVF_Default);
+
+	// --- Observer view (PC window) ---------------------------------------------------------------------------
+	TAutoConsoleVariable<int32> Observer(
+		TEXT("teleop.Observer"), 1,
+		TEXT("Third-person observer view on the PC window in VR (the HMD is unchanged): 1 = split screen, observer left,\n")
+		TEXT("operator eye view right; 2 = observer only; 0 = off (the spectator screen is left alone, e.g. vr.SpectatorScreenMode)."),
+		ECVF_Default);
+
+	TAutoConsoleVariable<int32> ObserverView(
+		TEXT("teleop.Observer.View"), 0,
+		TEXT("Observer camera preset: 0 = behind-right 45 deg (default), 1 = behind-left 45 deg, 2 = front-right over the desk,\n")
+		TEXT("3 = right side, 4 = top. Key V cycles."),
+		ECVF_Default);
+
+	TAutoConsoleVariable<float> ObserverHz(
+		TEXT("teleop.Observer.Hz"), 30.f, TEXT("Observer view capture rate, Hz."), ECVF_Default);
+
+	TAutoConsoleVariable<float> ObserverExposure(
+		TEXT("teleop.Observer.Exposure"), 3.5f, TEXT("Observer view: fixed (manual) exposure compensation, EV."), ECVF_Default);
+
+	TAutoConsoleVariable<float> ObserverSplit(
+		TEXT("teleop.Observer.Split"), 0.5f, TEXT("Split screen: share of the PC window width for the observer (0.2..0.8)."), ECVF_Default);
+
+	TAutoConsoleVariable<int32> DebugHideRobotHands(
+		TEXT("teleop.Debug.HideRobotHands"), 0,
+		TEXT("1 = hide the robot hand meshes and stop their animation (performance A/B). Grabbing still works."),
+		ECVF_Default);
+
+	TAutoConsoleVariable<int32> DebugShowRobotCamera(
+		TEXT("teleop.Debug.ShowRobotCamera"), 0,
+		TEXT("1 = show the robot camera's real pose now in the operator view (HMD): orange point + view frustum, overlaid on\n")
+		TEXT("every method. Right stick up/down (outside the blind test) or key C toggles."),
+		ECVF_Default);
+
+	TAutoConsoleVariable<float> DebugLogHandsSec(
+		TEXT("teleop.Debug.LogHandsSec"), 0.f,
+		TEXT("If > 0: every this many seconds, log the operator head pose ([head]), each remote hand's position, fingers and\n")
+		TEXT("the nearest grabbable within 1 m ([hand]; used to steer simulated controllers in tests), and the robot's waist,\n")
+		TEXT("neck and camera position ([robot]). 0 = off."),
 		ECVF_Default);
 
 	TAutoConsoleVariable<float> DebugQuitAfterSec(

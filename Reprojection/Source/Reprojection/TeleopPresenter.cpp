@@ -58,8 +58,8 @@ namespace
 
 	const TCHAR* NeckName(int32 Mode)
 	{
-		static const TCHAR* Names[] = { TEXT("Fixed"), TEXT("Rot2DoF"), TEXT("Rot3DoF"), TEXT("Full6DoF") };
-		return Names[FMath::Clamp(Mode, 0, 3)];
+		static const TCHAR* Names[] = { TEXT("Fixed"), TEXT("Rot2DoF"), TEXT("Rot3DoF"), TEXT("Full6DoF"), TEXT("Waist3+Neck2") };
+		return Names[FMath::Clamp(Mode, 0, 4)];
 	}
 
 	float Percentile(TArray<float>& Sorted, float P)
@@ -79,8 +79,17 @@ namespace
 		return FLinearColor(float(V.X), float(V.Y), float(V.Z), 0.f);
 	}
 
-	void SetCVar(TAutoConsoleVariable<int32>& CVar, int32 Value) { CVar->Set(Value, ECVF_SetByConsole); }
-	void SetCVar(TAutoConsoleVariable<float>& CVar, float Value) { CVar->Set(Value, ECVF_SetByConsole); }
+	// Controller-driven changes are logged, so a session log shows what the operator changed and when.
+	void SetCVar(TAutoConsoleVariable<int32>& CVar, int32 Value)
+	{
+		CVar->Set(Value, ECVF_SetByConsole);
+		UE_LOG(LogTeleop, Log, TEXT("[control] %s = %d"), *IConsoleManager::Get().FindConsoleObjectName(CVar.AsVariable()), Value);
+	}
+	void SetCVar(TAutoConsoleVariable<float>& CVar, float Value)
+	{
+		CVar->Set(Value, ECVF_SetByConsole);
+		UE_LOG(LogTeleop, Log, TEXT("[control] %s = %g"), *IConsoleManager::Get().FindConsoleObjectName(CVar.AsVariable()), Value);
+	}
 
 	ATeleopPresenter* FindPresenter(UWorld* World)
 	{
@@ -172,6 +181,19 @@ void ATeleopPresenter::Init(ATeleopGameMode* InGameMode, ATeleopOperatorPawn* In
 		DepthMesh->RegisterComponent();
 		DepthMesh->AttachToComponent(InPawn->GetVROrigin(), FAttachmentTransformRules::SnapToTargetNotIncludingScale);
 	}
+}
+
+bool ATeleopPresenter::GetShownFramePose(FTransform& OutLeft, FTransform& OutRight) const
+{
+	const UFrameRingBuffer* Buffer = RobotHead.IsValid() ? RobotHead->GetBuffer() : nullptr;
+	if (!Buffer || ShownSlot == INDEX_NONE)
+	{
+		return false;
+	}
+	const FTeleopFrameMeta& Meta = Buffer->GetMeta(ShownSlot);
+	OutLeft = Meta.EyeWorld[0];
+	OutRight = Meta.EyeWorld[1];
+	return true;
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -459,7 +481,8 @@ void ATeleopPresenter::EnsureDepthMesh(int32 DepthWidth, int32 DepthHeight)
 }
 
 // ---------------------------------------------------------------------------------------------------------------
-// M2 adaptive radius: median of the valid degraded depth in a central window of the shown frame, smoothed.
+// M2 adaptive radius: per shown frame, the median of the valid degraded depth in a central window; the target is the
+// median of those over the last teleop.M2.WindowSec (2 s), and R eases toward it (teleop.M2.SmoothSec).
 
 void ATeleopPresenter::UpdateAdaptiveRadius(double Now, float DeltaSeconds)
 {
@@ -482,11 +505,26 @@ void ATeleopPresenter::UpdateAdaptiveRadius(double Now, float DeltaSeconds)
 		if (Values.Num() > 0)
 		{
 			Values.Sort();
-			AdaptiveTargetCm = FMath::Clamp(Values[Values.Num() / 2], 20.f, 5000.f);
+			RadiusSamples.Emplace(Now, Values[Values.Num() / 2]);
 		}
 	}
 
-	// Smooth toward the target (time constant teleop.M2.SmoothSec).
+	// Window median: R only moves once most of the last WindowSec saw the new depth, not on every glance.
+	const double WindowSec = FMath::Max(TeleopCVars::M2WindowSec.GetValueOnGameThread(), 0.f);
+	RadiusSamples.RemoveAll([Now, WindowSec](const TPair<double, float>& S) { return Now - S.Key > WindowSec; });
+	if (RadiusSamples.Num() > 0)
+	{
+		TArray<float> Medians;
+		Medians.Reserve(RadiusSamples.Num());
+		for (const TPair<double, float>& S : RadiusSamples)
+		{
+			Medians.Add(S.Value);
+		}
+		Medians.Sort();
+		AdaptiveTargetCm = FMath::Clamp(Medians[Medians.Num() / 2], 20.f, 5000.f);
+	}
+
+	// Ease toward the target (time constant teleop.M2.SmoothSec).
 	const float Tau = FMath::Max(TeleopCVars::M2SmoothSec.GetValueOnGameThread(), 1e-3f);
 	AdaptiveRadiusCm += (AdaptiveTargetCm - AdaptiveRadiusCm) * (1.f - FMath::Exp(-DeltaSeconds / Tau));
 
@@ -547,7 +585,10 @@ void ATeleopPresenter::UpdateAdaptiveRadius(double Now, float DeltaSeconds)
 			State->bPending = false;
 			return;
 		}
-		if (!State->Readback)
+		// FRHIGPUTextureReadback sizes its staging texture on the first copy and reuses it, so a larger window
+		// (depth preset with a higher depth resolution) would overflow it: D3D12 E_INVALIDARG, fatal. Recreate it
+		// when the size changes. Safe here: a new copy is only enqueued when none is pending.
+		if (!State->Readback || State->Size != FIntPoint(W, H))
 		{
 			State->Readback = MakeUnique<FRHIGPUTextureReadback>(TEXT("TeleopRadiusReadback"));
 		}
@@ -617,8 +658,18 @@ void ATeleopPresenter::CycleMethod()
 		BlindTest.Confirm(FPlatformTime::Seconds());
 		return;
 	}
-	const int32 Next = (FMath::Clamp(TeleopCVars::Method.GetValueOnGameThread(), 0, 5) + 1) % 6;
-	SetCVar(TeleopCVars::Method, Next);
+	// GT > M1 > M2 > M3 > M4 > M0 > GT: the session starts in GT, and the head-locked M0 comes last (user, 2026-11-04).
+	static constexpr int32 Order[] = { 5, 1, 2, 3, 4, 0 };
+	const int32 Current = FMath::Clamp(TeleopCVars::Method.GetValueOnGameThread(), 0, 5);
+	int32 Index = 0;
+	for (int32 i = 0; i < UE_ARRAY_COUNT(Order); ++i)
+	{
+		if (Order[i] == Current)
+		{
+			Index = i;
+		}
+	}
+	SetCVar(TeleopCVars::Method, Order[(Index + 1) % UE_ARRAY_COUNT(Order)]);
 }
 
 void ATeleopPresenter::CycleLatencyPreset()
@@ -640,6 +691,11 @@ void ATeleopPresenter::ToggleJitterBuffer()
 void ATeleopPresenter::CycleDepthPreset()
 {
 	SetCVar(TeleopCVars::DepthPreset, (TeleopCVars::DepthPreset.GetValueOnGameThread() + 1) % UTeleopDepthDegrader::NumPresets);
+}
+
+void ATeleopPresenter::CycleNeckMode()
+{
+	SetCVar(TeleopCVars::NeckMode, (FMath::Clamp(TeleopCVars::NeckMode.GetValueOnGameThread(), 0, 4) + 1) % 5);
 }
 
 void ATeleopPresenter::AdjustSphereRadius(int32 Direction)
@@ -668,6 +724,8 @@ void ATeleopPresenter::ToggleBlindTest()
 void ATeleopPresenter::AdjustRating(int32 Direction)
 {
 	BlindTest.AdjustRating(Direction);
+	UE_LOG(LogTeleop, Log, TEXT("[control] blind rating %+d (%s)"), Direction,
+		BlindTest.GetPhase() == FTeleopBlindTest::EPhase::Rating ? TEXT("applied") : TEXT("ignored, not in the rating phase"));
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -789,7 +847,10 @@ void ATeleopPresenter::UpdateStats(double Now)
 		else
 		{
 			const bool bSphere = ActiveMethod == ETeleopMethod::M1_SphereFixed || ActiveMethod == ETeleopMethod::M2_SphereAdaptive || ActiveMethod == ETeleopMethod::M4_Hybrid;
-			P->SetHudText(FString::Printf(TEXT("%s%s   age %.0f ms (p95 %.0f)\n%s %+.0f ms  JB %s  lat p50 %.0f / p95 %.0f  loss %.1f%%\ndepth %s   b %.0f mm   neck %s   cam %.0f Hz"),
+			const ATeleopGameMode* GM = GameMode.Get();
+			const FString Warning = GM ? GM->GetCalibrationWarning() : FString();
+			P->SetHudText((Warning.IsEmpty() ? FString() : Warning + TEXT("\n")) +
+				FString::Printf(TEXT("%s%s   age %.0f ms (p95 %.0f)\n%s %+.0f ms  JB %s  lat p50 %.0f / p95 %.0f  loss %.1f%%\ndepth %s   b %.0f mm   neck %s   cam %.0f Hz"),
 				*MethodLabel(), bSphere ? *FString::Printf(TEXT("  R %.0f cm"), Radius) : TEXT(""),
 				Stats.AgeP50Ms, Stats.AgeP95Ms,
 				*FTeleopLatencyModel::GetPresetName(Preset), Offset, bJB ? *FString::Printf(TEXT("on (%.0f)"), JitterBufferTargetMs) : TEXT("off"),
