@@ -199,6 +199,19 @@ namespace TeleopCVars
 	TAutoConsoleVariable<float> DebugHeadOffsetZ(
 		TEXT("teleop.Debug.HeadOffsetZ"), 0.f, TEXT("Desktop only: head translation in the tracking frame, Z (up), cm."), ECVF_Default);
 
+	// The whole operator (head and hands) against the remote world, in the calibrated station frame. Works in VR, where the
+	// head itself cannot be scripted: with teleop.Debug.Freeze it reproduces a head move the robot has not followed yet.
+	TAutoConsoleVariable<float> DebugMapOffsetX(
+		TEXT("teleop.Debug.MapOffsetX"), 0.f, TEXT("Debug: shifts the operator (head and hands) against the remote world, X (forward), cm."), ECVF_Default);
+	TAutoConsoleVariable<float> DebugMapOffsetY(
+		TEXT("teleop.Debug.MapOffsetY"), 0.f, TEXT("Debug: shifts the operator (head and hands) against the remote world, Y (right), cm."), ECVF_Default);
+	TAutoConsoleVariable<float> DebugMapOffsetZ(
+		TEXT("teleop.Debug.MapOffsetZ"), 0.f, TEXT("Debug: shifts the operator (head and hands) against the remote world, Z (up), cm."), ECVF_Default);
+	TAutoConsoleVariable<float> DebugMapYawDeg(
+		TEXT("teleop.Debug.MapYawDeg"), 0.f,
+		TEXT("Debug: turns the operator against the remote world about the calibrated head position (vertical axis), deg, + = right."),
+		ECVF_Default);
+
 	// --- Performance / automation -------------------------------------------------------------------------
 
 	TAutoConsoleVariable<float> DebugProfileGPUAfterSec(

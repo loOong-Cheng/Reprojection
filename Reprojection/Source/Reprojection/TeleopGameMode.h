@@ -45,8 +45,8 @@ public:
 	/** HUD line while no valid calibration exists (empty when calibrated). */
 	FString GetCalibrationWarning() const;
 
-	/** Operator tracking frame -> remote world (remote = local * T_map). */
-	FTransform GetLocalToRemote() const { return Calibration * GetStationTransform(); }
+	/** Operator tracking frame -> remote world (remote = local * T_map). Includes teleop.Debug.MapOffset* / MapYawDeg. */
+	FTransform GetLocalToRemote() const;
 
 	FTransform GetStationTransform() const { return FTransform(FRotator(0.f, RobotStationYaw, 0.f), RobotStationLocation); }
 

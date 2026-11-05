@@ -113,7 +113,13 @@ imperfect depth, and lets the operator switch presentation/compensation methods 
   still moves), `teleop.Debug.MaskView` (M4: green = mesh, red = hole in the frame, blue = outside it),
   `teleop.Debug.MeshGTDepth` (mesh from the frame alpha, exact depth: ground truth for the disocclusion mask only),
   `teleop.Debug.HideHud`, `teleop.Debug.HeadPitchDeg`, `teleop.Eval.State [tag]` (`[eval]` line: left eye vs left camera
-  offset, turn, frame age, R, keyframes, median GPU / frame ms of 90 frames), `teleop.Eval.Shot <png>`. The desktop head
+  offset, turn, frame age, R, keyframes, median GPU / frame ms of 90 frames), `teleop.Eval.Shot <png>`,
+  `teleop.Debug.MapOffsetX/Y/Z` and `MapYawDeg` (shift / turn the whole operator, head and hands, against the remote world
+  in the station frame; works in VR, where a script cannot move the headset). README screenshots (`README.md`, 2026-11-05):
+  `Tools/readme_shots.ps1` in VR Preview (simulator) + `Tools/readme_compose.py`. In VR, `teleop.Eval.Shot` saves both
+  HMD eye buffers, not the spectator screen; the observer half is `ATeleopObserver::GetRenderTarget()` (export_render_target).
+  Window capture (PrintWindow) is black and simulator key posting does nothing while the remote-desktop session is
+  disconnected (no foreground window). The desktop head
   must turn about a neck point (`teleop_eval._head`: eye = neck + R * (10, 0, 5) cm), not about the eye: turning about
   the eye moves the implied neck, and Waist3Neck2 then leans and rolls its cameras (3-14 deg seen) to follow it.
   Results: Saved/TeleopEval/2026-11-04/ (PNGs, metrics, editor log) and the "Verified" entry below.

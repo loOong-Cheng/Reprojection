@@ -3,6 +3,7 @@
 #include "Reprojection.h"
 #include "RemoteHand.h"
 #include "RobotHead.h"
+#include "TeleopCVars.h"
 #include "TeleopObserver.h"
 #include "TeleopOperatorPawn.h"
 #include "TeleopOperatorRoom.h"
@@ -109,6 +110,16 @@ void ATeleopGameMode::SetupSession(ATeleopOperatorPawn* Pawn)
 	Observer->Init(this, Pawn, RobotHead, Presenter);
 
 	UE_LOG(LogTeleop, Log, TEXT("Session: robot station at %s yaw %.1f"), *RobotStationLocation.ToString(), RobotStationYaw);
+}
+
+FTransform ATeleopGameMode::GetLocalToRemote() const
+{
+	// Debug offset in the calibrated station frame, where the calibrated head is at (0, 0, eye height): the yaw turns
+	// about the head's vertical axis.
+	const FTransform DebugOffset(FRotator(0.f, TeleopCVars::DebugMapYawDeg.GetValueOnGameThread(), 0.f),
+		FVector(TeleopCVars::DebugMapOffsetX.GetValueOnGameThread(), TeleopCVars::DebugMapOffsetY.GetValueOnGameThread(),
+			TeleopCVars::DebugMapOffsetZ.GetValueOnGameThread()));
+	return Calibration * DebugOffset * GetStationTransform();
 }
 
 void ATeleopGameMode::BeginPlay()

@@ -57,6 +57,10 @@ namespace TeleopCVars
 	extern TAutoConsoleVariable<float> DebugHeadOffsetX;
 	extern TAutoConsoleVariable<float> DebugHeadOffsetY;
 	extern TAutoConsoleVariable<float> DebugHeadOffsetZ;
+	extern TAutoConsoleVariable<float> DebugMapOffsetX;
+	extern TAutoConsoleVariable<float> DebugMapOffsetY;
+	extern TAutoConsoleVariable<float> DebugMapOffsetZ;
+	extern TAutoConsoleVariable<float> DebugMapYawDeg;
 
 	// Performance / automation.
 	extern TAutoConsoleVariable<float> DebugProfileGPUAfterSec;
