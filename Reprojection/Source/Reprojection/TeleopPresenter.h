@@ -76,6 +76,19 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Teleop")
 	float GetAdaptiveRadiusCm() const { return AdaptiveRadiusCm; }
 
+	/** Sphere radius the active method uses (adaptive or teleop.SphereRadiusCm), cm. */
+	float GetShownSphereRadiusCm() const;
+
+	/** Id of the frame shown this tick (-1 before the first). */
+	int64 GetShownFrameId() const { return ShownFrameId; }
+
+	/** HUD name of the active method (M4 with its fill; the condition code in the blind test). */
+	FString GetMethodLabel() const { return MethodLabel(); }
+
+	/** Left eye relative to the left camera of the shown frame: offset in the camera frame (x fwd, y right, z up, cm) and
+	 *  rotation angle (deg). False before the first frame. */
+	bool GetEyeCameraOffset(FVector& OutOffsetCm, float& OutRotDeg) const;
+
 	// --- Operator controls (HANDOFF §8) ---
 	void CycleMethod();
 	void CycleLatencyPreset();
@@ -132,6 +145,7 @@ private:
 	void UpdateStats(double Now);
 	void LogDisplay(double Now);
 	FString MethodLabel() const;
+	bool GetLeftEyeAndCamera(FTransform& OutEye, FTransform& OutCam) const;
 	bool UsesAdaptiveRadius(ETeleopMethod Method) const;
 
 	TWeakObjectPtr<ATeleopGameMode> GameMode;

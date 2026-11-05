@@ -30,7 +30,7 @@ struct FTeleopDisplayRow
  *   capture.csv  one row per captured robot frame: id, C_i, L_i, A_i, dropped, bad state
  *   display.csv  one row per displayed operator frame: shown frame, frame age, method and presets
  *   blind.csv    blind-test ratings (written by FTeleopBlindTest)
- * Timestamps are FPlatformTime::Seconds(). Enabled by teleop.Log (default 1).
+ * Timestamps are TeleopClock::Now() (wall clock, or frame time in a fixed-step replay). Enabled by teleop.Log (default 1).
  */
 class FTeleopLogger
 {

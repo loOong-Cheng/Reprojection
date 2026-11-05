@@ -115,14 +115,30 @@ imperfect depth, and lets the operator switch presentation/compensation methods 
   `teleop.Debug.HideHud`, `teleop.Debug.HeadPitchDeg`, `teleop.Eval.State [tag]` (`[eval]` line: left eye vs left camera
   offset, turn, frame age, R, keyframes, median GPU / frame ms of 90 frames), `teleop.Eval.Shot <png>`,
   `teleop.Debug.MapOffsetX/Y/Z` and `MapYawDeg` (shift / turn the whole operator, head and hands, against the remote world
-  in the station frame; works in VR, where a script cannot move the headset). README screenshots (`README.md`, 2026-11-05):
-  `Tools/readme_shots.ps1` in VR Preview (simulator) + `Tools/readme_compose.py`. In VR, `teleop.Eval.Shot` saves both
+  in the station frame; works in VR, where a script cannot move the headset). VR still screenshots (the README used them
+  until the replay GIFs replaced them, 2026-11-05): `Tools/readme_shots.ps1` in VR Preview (simulator) +
+  `Tools/readme_compose.py`. In VR, `teleop.Eval.Shot` saves both
   HMD eye buffers, not the spectator screen; the observer half is `ATeleopObserver::GetRenderTarget()` (export_render_target).
   Window capture (PrintWindow) is black and simulator key posting does nothing while the remote-desktop session is
   disconnected (no foreground window). The desktop head
   must turn about a neck point (`teleop_eval._head`: eye = neck + R * (10, 0, 5) cm), not about the eye: turning about
   the eye moves the implied neck, and Waist3Neck2 then leans and rolls its cameras (3-14 deg seen) to follow it.
   Results: Saved/TeleopEval/2026-11-04/ (PNGs, metrics, editor log) and the "Verified" entry below.
+- Trajectory replay (user request 2026-11-05: still screenshots mislead, e.g. M0 frozen shows a complete, if old, image;
+  GIFs of every method with the same head and hand trajectories, temporal metrics). `FTeleopReplay` (`TeleopReplay.h`,
+  owned by the game mode, set up in `InitGame` from the command line) plays a trajectory CSV (head, hands, fingers in the
+  tracking frame; a grip crossing 0.5 grabs / releases) into the desktop pawn and writes per frame the viewport
+  (`eye_%05d.png`, via `UGameViewportClient::OnScreenshotCaptured`), every n-th frame the observer view (`obs_%05d.png`,
+  resized to the viewport) and `frames.csv` (shown frame, age, eye - camera offset, R, keyframes), then exits.
+  Determinism: `TeleopClock::Now()` replaces `FPlatformTime::Seconds()` in all simulation code; with
+  `-UseFixedTimeStep -FPS=72` it counts frames since `InitGame` (bit-identical times every run), and M2's readback waits
+  for the GPU so R updates on a fixed frame. Two runs of the same method give identical `frames.csv`; pixels differ by GPU
+  lighting noise only (mean < 1/255, p99 8/255). Tools: `Tools/replay_trajectory.py` (min-jerk trajectory + `SEGMENTS`;
+  cube positions from the `[replay] scene` log lines), `Tools/replay_run.ps1` (one standalone `-game -nohmd` process per
+  method, ~25 s each, editor may stay closed), `Tools/replay_metrics.py` (PSNR, LPIPS, misregistration, slip, flicker vs
+  GT; needs opencv), `Tools/replay_gifs.py` (per-method TPV + eye GIFs, 3x3 compare grid; ffmpeg). `-TeleopSet="a=1;b=2"`
+  sets CVars before the session starts (also outside replays). `teleop.Replay.Record <file>` / `teleop.Replay.Stop`
+  record a live trajectory (VR too) to Saved/TeleopReplay/. Results: Saved/TeleopReplay/2026-11-05/.
 - Controls (HANDOFF §8, adapted so nothing collides with grabbing or the robot fingers): the session starts in GT and A
   cycles GT>M1>M2>M3>M4>M0 (user, 2026-11-04: starting head-locked in M0 was unpleasant; `teleop.Method` values are
   unchanged, 0 = M0 ... 5 = GT) (blind: confirm); B latency preset; X neck mode (Fixed > Rot2DoF > Rot3DoF > Full6DoF > Waist3+Neck2; keyboard N);
@@ -268,6 +284,15 @@ imperfect depth, and lets the operator switch presentation/compensation methods 
   disagree on M3 vs M2 (holes vs registration), so no single metric ranks the methods. Not measured: anything temporal
   (flicker, swimming, judder). Report artifact: https://claude.ai/artifact/13krAiNke12Xb6eKxjrnMF (private); data,
   full-resolution PNGs and notes.json in Saved/TeleopEval/2026-11-04/.
+- Method comparison in motion (2026-11-05; user: still screenshots mislead, GIFs of every method on the same head and
+  hand trajectory, temporal metrics). `Tools/replay_*`, 10 s scripted trajectory (turn 45 deg, grab and carry a cube,
+  lean 15 cm, quick 30 deg look at 144 deg/s), WiFi, ZEDlike, Waist3Neck2, desktop left eye, 72 Hz fixed step. Means
+  over the run (misregistration deg / slip deg/s / flicker / LPIPS): M0 3.75 / 24.3 / 5.18 / 0.367, M1 1.28 / 4.2 / 1.82 /
+  0.206, M2 1.34 / 4.5 / 1.79 / 0.211 (R settled at 82-89 cm on the desk, so M2 = M1 here), M3 0.22 / 3.2 / 2.40 / 0.315,
+  M4 fill 0 0.12 / 2.4 / 1.64 / 0.161, fill 1 0.14 / 2.7 / 2.32 / 0.197, fill 2 0.10 / 2.1 / 1.76 / 0.185. M0 is 1.2 deg
+  off at rest (the spheres 1.0: the camera sits 2.7 cm from the eye with the head pitched) and 15 deg at peaks; fill 2
+  is the most world-locked but flickers more at rest and shows stale fan / hand fragments, so fill 0 leads LPIPS. A
+  repeat run reproduces every value. Write-up: `docs/eval/2026-11-05-replay/README.md`; GIFs `docs/img/replay/`.
 - How to measure: `teleop.Debug.QuitAfterSec N` exits cleanly; the module logs `[fps]` every 2 s (any game mode);
   the presenter logs `[stats]` (frame age + fps). Run-to-run spread on the simulator is +-3 fps; if a run hangs at
   frame 0, restart `MetaXRSimulator.exe`. Make sure `synth_env_server.exe` is not running (see the XR runtime section). Plain Template baseline:
@@ -326,7 +351,8 @@ while the editor is running with this project. Plugin source: github.com/remiphi
 - `SCS_SceneColorSceneDepth` alpha = **view-space z in cm along the view axis, not radial distance**.
 - Mind reversed-Z and the uv y-flip. Every projection/unprojection path gets a round-trip unit test
   (error < 0.1 mm) before it is used in a material.
-- Time: `FPlatformTime::Seconds()` everywhere.
+- Time: `TeleopClock::Now()` everywhere in simulation code (wall clock, or frame time in a fixed-step replay); the
+  module's `[fps]` log and `teleop.Debug.QuitAfterSec` stay on the wall clock.
 - All tunables are `teleop.*` console variables (HANDOFF suggested a DataAsset; CVars were enough so far).
 - Per-eye selection in materials uses `ResolvedView.StereoPassIndex`. It works with Instanced Stereo **on**
   (project default; the fps difference to off was within run-to-run noise) in both pixel and vertex stages;

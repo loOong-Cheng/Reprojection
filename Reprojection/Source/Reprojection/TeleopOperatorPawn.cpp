@@ -3,6 +3,7 @@
 #include "Reprojection.h"
 #include "RobotHead.h"
 #include "TeleopCVars.h"
+#include "TeleopClock.h"
 #include "TeleopGameMode.h"
 #include "TeleopObserver.h"
 #include "TeleopPresenter.h"
@@ -189,12 +190,12 @@ void ATeleopOperatorPawn::Tick(float DeltaSeconds)
 {
 	Super::Tick(DeltaSeconds);
 
-	RecordPoses(FPlatformTime::Seconds());
+	RecordPoses(TeleopClock::Now());
 
 	const float LogEvery = TeleopCVars::DebugLogHandsSec.GetValueOnGameThread();
-	if (LogEvery > 0.f && FPlatformTime::Seconds() - LastHeadLogTime >= LogEvery)
+	if (LogEvery > 0.f && TeleopClock::Now() - LastHeadLogTime >= LogEvery)
 	{
-		LastHeadLogTime = FPlatformTime::Seconds();
+		LastHeadLogTime = TeleopClock::Now();
 		FTransform Head;
 		if (GetLatestLocalPose(ETeleopDevice::Head, Head))
 		{
@@ -274,10 +275,16 @@ void ATeleopOperatorPawn::ToggleRobotCameraMarker(const TCHAR* Source)
 
 void ATeleopOperatorPawn::RecordPoses(double Now)
 {
+	// Trajectory replay (desktop only, FTeleopReplay): head, hands and fingers come from the file.
+	ATeleopGameMode* GM = GetWorld()->GetAuthGameMode<ATeleopGameMode>();
+	FTeleopTrajectorySample Replay;
+	const bool bReplay = GM && GM->GetReplay().GetSample(Replay);
+
 	// Head
 	FTransform Head;
 	bool bHeadValid = false;
-	if (UHeadMountedDisplayFunctionLibrary::IsHeadMountedDisplayEnabled() && GEngine && GEngine->XRSystem.IsValid())
+	const bool bHmd = UHeadMountedDisplayFunctionLibrary::IsHeadMountedDisplayEnabled() && GEngine && GEngine->XRSystem.IsValid();
+	if (bHmd)
 	{
 		FQuat Orientation;
 		FVector Position;
@@ -292,15 +299,22 @@ void ATeleopOperatorPawn::RecordPoses(double Now)
 			bHeadValid = bHasData && (bHeadTracked || bHasPose[0]);
 		}
 	}
+	else if (bReplay)
+	{
+		Head = Replay.Head;
+	}
 	else
 	{
-		// Desktop: fixed seated eye, optionally a synthetic yaw sweep for tests.
+		// Desktop: fixed seated eye, optionally a synthetic yaw sweep for tests (or the replayed trajectory above).
 		const float Amp = TeleopCVars::DebugHeadYawAmpDeg.GetValueOnGameThread();
 		const float Hz = TeleopCVars::DebugHeadYawHz.GetValueOnGameThread();
 		const float Yaw = TeleopCVars::DebugHeadYawDeg.GetValueOnGameThread() + (Amp != 0.f ? Amp * FMath::Sin(2.0 * PI * Hz * Now) : 0.f);
 		const FVector Offset(TeleopCVars::DebugHeadOffsetX.GetValueOnGameThread(), TeleopCVars::DebugHeadOffsetY.GetValueOnGameThread(),
 			TeleopCVars::DebugHeadOffsetZ.GetValueOnGameThread());
 		Head = FTransform(FRotator(TeleopCVars::DebugHeadPitchDeg.GetValueOnGameThread(), Yaw, 0.f), FVector(0.f, 0.f, DesktopEyeHeight) + Offset);
+	}
+	if (!bHmd)
+	{
 		// The robot follows the head centre (recorded below); the view renders from the left eye (teleop.Debug.DesktopEye).
 		const float HalfIpdCm = TeleopCVars::DebugDesktopEye.GetValueOnGameThread() != 0
 			? FMath::Clamp(TeleopCVars::BaselineMm.GetValueOnGameThread(), 0.f, 200.f) * 0.05f : 0.f;
@@ -315,18 +329,43 @@ void ATeleopOperatorPawn::RecordPoses(double Now)
 	}
 
 	// Hands
-	auto RecordHand = [this, Now](UMotionControllerComponent* MC, const FVector& RestPos, int32 Index)
+	auto RecordHand = [this, Now, bReplay, &Replay](UMotionControllerComponent* MC, const FVector& RestPos, int32 Index)
 	{
-		FTransform Pose = MC->IsTracked()
-			? MC->GetRelativeTransform()
+		FTransform Pose = bReplay ? Replay.Hand[Index - 1]
+			: MC->IsTracked() ? MC->GetRelativeTransform()
 			: FTransform(FRotator::ZeroRotator, RestPos);
 		Histories[Index].Add(Now, Pose);
 		bHasPose[Index] = true;
 	};
 	RecordHand(LeftController, DesktopLeftHand, 1);
 	RecordHand(RightController, DesktopRightHand, 2);
+	if (bReplay)
+	{
+		for (int32 h = 0; h < 2; ++h)
+		{
+			// The grip grabs like the Enhanced Input action on the grip axis (actuation 0.5).
+			const bool bWas = Fingers[h].Grasp >= 0.5f;
+			Fingers[h] = Replay.Fingers[h];
+			const bool bIs = Fingers[h].Grasp >= 0.5f;
+			if (bIs != bWas)
+			{
+				ForwardGrab(h == 0, bIs);
+			}
+		}
+	}
 	FingerHistories[0].Add(Now, Fingers[0]);
 	FingerHistories[1].Add(Now, Fingers[1]);
+
+	if (GM && GM->GetReplay().IsRecording())
+	{
+		FTeleopTrajectorySample Sample;
+		GetLatestLocalPose(ETeleopDevice::Head, Sample.Head);
+		GetLatestLocalPose(ETeleopDevice::LeftHand, Sample.Hand[0]);
+		GetLatestLocalPose(ETeleopDevice::RightHand, Sample.Hand[1]);
+		Sample.Fingers[0] = Fingers[0];
+		Sample.Fingers[1] = Fingers[1];
+		GM->GetReplay().AddRecordedSample(Sample);
+	}
 }
 
 bool ATeleopOperatorPawn::GetLatestLocalPose(ETeleopDevice Device, FTransform& OutPose) const

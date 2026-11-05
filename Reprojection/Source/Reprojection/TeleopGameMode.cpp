@@ -4,6 +4,7 @@
 #include "RemoteHand.h"
 #include "RobotHead.h"
 #include "TeleopCVars.h"
+#include "TeleopClock.h"
 #include "TeleopObserver.h"
 #include "TeleopOperatorPawn.h"
 #include "TeleopOperatorRoom.h"
@@ -32,6 +33,12 @@ ATeleopGameMode::ATeleopGameMode()
 {
 	DefaultPawnClass = ATeleopOperatorPawn::StaticClass();
 	PrimaryActorTick.bCanEverTick = true;
+}
+
+void ATeleopGameMode::InitGame(const FString& MapName, const FString& Options, FString& ErrorMessage)
+{
+	Super::InitGame(MapName, Options, ErrorMessage);
+	Replay.Init(this);
 }
 
 AActor* ATeleopGameMode::FindPlayerStart_Implementation(AController* Player, const FString& IncomingName)
@@ -135,6 +142,7 @@ void ATeleopGameMode::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
 	FCoreDelegates::VRHeadsetPutOnHead.Remove(PutOnHeadHandle);
 	FCoreDelegates::VRHeadsetRecenter.Remove(SystemRecenterHandle);
+	Replay.Shutdown();
 	Super::EndPlay(EndPlayReason);
 }
 
@@ -152,7 +160,7 @@ void ATeleopGameMode::Tick(float DeltaSeconds)
 	{
 		FTransform Head;
 		const bool bHave = OperatorPawn->GetLatestLocalPose(ETeleopDevice::Head, Head);
-		if (AutoRecenter.Update(FPlatformTime::Seconds(), bHave && OperatorPawn->IsHeadTracked(), Head))
+		if (AutoRecenter.Update(TeleopClock::Now(), bHave && OperatorPawn->IsHeadTracked(), Head))
 		{
 			Recenter();
 		}
@@ -199,6 +207,6 @@ void ATeleopGameMode::HandleGrabInput(bool bLeft, bool bPressed)
 {
 	if (ARemoteHand* Hand = GetRemoteHand(bLeft))
 	{
-		Hand->QueueGrab(bPressed, FPlatformTime::Seconds());
+		Hand->QueueGrab(bPressed, TeleopClock::Now());
 	}
 }

@@ -5,12 +5,12 @@ project simulates that chain in Unreal Engine 5.7: the robot, its cameras, a noi
 operator can switch between presentation methods live in the headset (M0–M4, GT), and the same methods can be
 compared offline against ground truth.
 
-![Spectator view in VR: third-person observer on the left, the operator's left eye on the right (M3 depth mesh)](docs/img/move_M3.jpg)
+![The same 10 s of operator motion with every method, synchronized](docs/img/replay/compare.gif)
 
-*The PC window during a VR session. Left: a third-person observer view. The operator is in green, and the robot
-camera is in orange. Yellow is where the frame now on the headset was taken. Right: what the operator's left eye
-sees. Here the operator has moved 15 cm to the right and the robot hasn't followed yet, so M3 leaves dark holes where
-the old camera position could not see.*
+*The same 10 s of operator motion, replayed with every method in sync. Top left: a third-person view. Next to it is
+GT, what the eye should see now, and the M0 baseline, the newest frame shown as received. The number after each name
+is how far that frame puts the world from where it really is (misregistration). Per-method GIFs and the metrics are
+under [Methods comparison](#methods-comparison).*
 
 ## Motivation
 
@@ -27,7 +27,7 @@ head movement. That ruins depth perception and causes motion sickness. Reproject
 - **Ground truth.** The simulator can render what the operator *should* see from the current eye. With that, every
   method can be measured, pixel by pixel.
 - **Control and repeatability.** Latency (mean, jitter, loss), depth quality, camera baseline and neck dynamics are
-  each one switch. The same frozen instant can be shown with every method.
+  each one switch. The same operator motion can be replayed with every method, frame for frame.
 - **Realism where it matters.** A method tuned on perfect depth and constant latency fails on a real robot. So the
   simulator deliberately degrades what a real system has:
   - latency: Gilbert-Elliott bursts, AR(1) jitter, frame loss;
@@ -49,7 +49,7 @@ The original design brief (in Chinese) is [`HANDOFF.md`](HANDOFF.md).
 | XR plugins | Epic OpenXR + Meta XR plugin (`OculusXR` 1.201.0, installed in the engine). Backend `XrApi=OVRPluginOpenXR`. |
 | No headset | Meta XR Simulator v205 (an OpenXR runtime), or desktop Play-In-Editor |
 | Editor automation | [mcp-unreal](https://github.com/remiphilippe/mcp-unreal): an MCP server plus an editor plugin (`Reprojection/Plugins/MCPUnreal`, configured in `.mcp.json`), so a coding agent can drive the editor. Also the Python Editor Script plugin and the Remote Control API. |
-| Evaluation tools | Python 3 with numpy, scipy, pillow, and torch + lpips for LPIPS (`Tools/`) |
+| Evaluation tools | Python 3 with numpy, scipy, pillow, opencv, matplotlib, and torch + lpips for LPIPS; ffmpeg for the GIFs (`Tools/`) |
 | Developed on | Windows 11, RTX 3080 Ti, i9-12900KF, 32 GB |
 
 Binary assets are stored with Git LFS.
@@ -133,100 +133,130 @@ What gets simulated:
 
 ## Methods comparison
 
-### Screenshots
+### Same motion, every method
 
-These are the PC window during VR Preview on the Meta XR Simulator, in the spectator layout:
+A still screenshot flatters the baseline. A frozen M0 frame is a complete, sharp image; it is just from the wrong place
+and time. So every method replays **the same 10 s operator trajectory**
+([`Tools/replay_trajectory.py`](Tools/replay_trajectory.py)):
 
-- **Left:** the third-person observer, which the operator never sees. Green is the operator now (head, view and
-  hands). Orange is the robot camera now. Yellow is the capture pose of the frame on the headset. Grey is the robot's
-  body.
-- **Right:** the operator's left eye.
+1. turn the head 45° right, to the purple cubes;
+2. reach with the right hand and grab the top cube;
+3. carry it to the front while looking back, and drop it;
+4. lean 15 cm right and back;
+5. look 30° left and back, quickly (up to 144°/s).
 
-**Setup.** WiFi latency and ZEDlike depth. Before freezing, the operator swayed for 3 s, so M2's radius (4.4 m) and the
-memory (9 keyframes) built up as they would in use.
+Each method runs in its own process on a fixed 72 Hz time step ([`Tools/replay_run.ps1`](Tools/replay_run.ps1)). So
+the robot, the latency draws and the shown frames are identical in every run, frame for frame. Settings:
+- WiFi latency: the shown frame is 56–125 ms old;
+- ZEDlike depth;
+- the Waist3Neck2 robot;
+- the desktop view from the left eye, with a 90° field of view.
 
-**How the shots were made.** Every method shows the same instant: `teleop.Debug.Freeze` holds the robot, the props and
-the shown frame.
-- **The move.** The operator was shifted against the remote world with `teleop.Debug.MapOffset*` (a scripted headset
-  move wasn't possible), so the robot hands moved with the operator.
-- **The image.** Each picture combines the two images the spectator screen shows: the observer render target and the
-  left eye buffer.
-- **The HUD.** While frozen, its latency figures read 0.
-- **Scripts.** `Tools/readme_shots.ps1` and `Tools/readme_compose.py`.
+In each GIF:
+- **Left: a third-person view** (PC window only).
+  - Green is the operator now.
+  - Orange is the robot camera now.
+  - Yellow is where the shown frame was taken.
+  - The robot body is grey and its hands are dark.
+- **Right: the operator's left eye.**
+- **Footer:** what the operator is doing, how old the shown frame is, and the misregistration.
 
-#### Sideways move: the operator 15 cm to the right; the shown frame is 111 ms old
+They play at about real time (12.5 fps).
 
-**GT: the reference.** The green frustum is 15 cm right of the yellow one. The robot camera (orange, behind the
-yellow) hasn't followed.
+**GT: the reference.** What the eye should see now; no real system has it. The world stays still while the head
+moves. In the third-person view the robot follows the green operator with a lag, and its hand trails the operator's
+by the command latency as it picks up the cube.
 
-![GT](docs/img/move_GT.jpg)
+![GT](docs/img/replay/GT.gif)
 
-**M0: head-locked.** This is the old frame as the camera saw it, 15 cm to the left. Near things (ball,
-checkerboard, hands) sit several degrees away from where GT has them. In motion, the whole world moves with the head.
+**M0, head-locked: the baseline.** The picture is glued to the face. On every turn the world turns with the head and
+then catches up when newer frames arrive: up to 15° off on the quick look. During the lean, the view moves only when
+the robot's waist follows.
 
-![M0](docs/img/move_M0.jpg)
+![M0](docs/img/replay/M0.gif)
 
-**M1: sphere, R = 1 m.** Objects about 1 m away land roughly right. The wall, about 4–5 m away, is over-shifted and
-bent (its grid lines curve), because everything is treated as if it were 1 m away.
+**M1: sphere, R = 1 m.** Turns are compensated, so the world stays put. On the quick look, a black band appears at the
+left edge, which the robot camera hasn't seen yet. Because everything is placed at 1 m, near and far things slip
+against each other during the lean (up to about 4°).
 
-![M1](docs/img/move_M1.jpg)
+![M1](docs/img/replay/M1.gif)
 
-**M2: sphere, adaptive R (4.4 m here).** The wall and the doorway are straight and in place. Now the near ball, hands
-and checkerboard are misplaced instead: a sphere can be right at one distance only.
+**M2: sphere, adaptive R.** Like M1, but R is the median depth in the centre of the view. Here that is the desk, at
+82–89 cm, so M2 behaves almost exactly like M1.
 
-![M2](docs/img/move_M2.jpg)
+![M2](docs/img/replay/M2.gif)
 
-**M3: depth mesh** (the image at the top). Everything with depth is where GT has it, but the old camera saw nothing in
-these dark areas:
-- the "shadows" to the right of the hands, the ball, the checkerboard and the box. These are disocclusions, revealed
-  by moving right.
-- the sky and the room behind the doorway, which are beyond stereo range;
-- speckles where ZEDlike depth has holes.
+**M3: depth mesh.** Everything with depth stays in place (0.2°). But there are holes:
+- the sky and the room behind the doorway, which are beyond stereo range, stay black;
+- speckles at depth edges flicker;
+- during the lean, dark "shadows" open beside the cube, the hands and the rods.
 
-**M4 fill 0: mesh + sphere.** The sky and the doorway are back, but each disocclusion shows a **ghost copy of the
-object in front of it**: a second left hand, a doubled fan, an extra strip of checkerboard. The sphere samples the
-old frame where the occluder was. This is inherent to the sphere fill, not a bug.
+![M3](docs/img/replay/M3.gif)
 
-![M4 fill 0](docs/img/move_M4f0.jpg)
+**M4 fill 0: mesh + sphere (default).** The sphere fills M3's holes. This gives the best image scores and the least
+flicker. During the lean, the disocclusions show ghost copies of what is in front, such as a doubled fan blade and
+doubled rods.
 
-**M4 fill 1: mesh + nearest background.** No ghost copies. Instead, background colour is smeared across each hole,
-which shows as streaks next to the hands.
+![M4 fill 0](docs/img/replay/M4f0.gif)
 
-![M4 fill 1](docs/img/move_M4f1.jpg)
+**M4 fill 1: mesh + nearest background.** No ghosts. Instead, background colour is smeared into the holes. It shows as
+streaks beside the rods and hands that change from frame to frame.
 
-**M4 fill 2: mesh + keyframe memory.** Earlier frames saw most of the revealed background, so the ball and
-checkerboard holes are filled with what is really there. What remains are **stale fragments of the robot hands**: they
-moved after those keyframes were taken, and the memory cannot know that.
+![M4 fill 1](docs/img/replay/M4f1.gif)
 
-![M4 fill 2](docs/img/move_M4f2.jpg)
+**M4 fill 2: mesh + keyframe memory.** Earlier keyframes fill the disocclusions with the real background, and the image
+is the most world-locked (0.10°). But the memory cannot know what moved, so fragments of the spinning fan and of the
+robot hand stay where they were when a keyframe was taken.
 
-#### Head turn: the operator turned 25° to the right; the shown frame is 83 ms old
+![M4 fill 2](docs/img/replay/M4f2.gif)
 
-**GT.**
+### Metrics over the whole motion
 
-![GT turn](docs/img/turn_GT.jpg)
+| Method | LPIPS ↓ | PSNR dB ↑ | Misregistration ° ↓ (mean / p95) | Slip °/s ↓ (mean / p95) | Flicker ↓ |
+|---|---|---|---|---|---|
+| **M0** (baseline) | 0.367 | 13.3 | 3.75 / 11.2 | 24.3 / 106 | 5.18 |
+| M1 (R 1 m) | 0.206 | 17.2 | 1.28 / 2.92 | 4.2 / 14.6 | 1.82 |
+| M2 (adaptive R) | 0.211 | 17.6 | 1.34 / 3.06 | 4.5 / 15.4 | 1.79 |
+| M3 | 0.315 | 15.8 | 0.22 / 0.34 | 3.2 / 7.7 | 2.40 |
+| M4 fill 0 | **0.161** | **20.0** | 0.12 / 0.22 | 2.4 / 5.7 | **1.64** |
+| M4 fill 1 | 0.197 | 19.4 | 0.14 / 0.22 | 2.7 / 6.4 | 2.32 |
+| M4 fill 2 | 0.185 | 19.9 | **0.10** / **0.14** | **2.1** / **4.6** | 1.76 |
 
-**M0.** The old frame stays in front of the face, so the remote world turns with the head. Of all the errors, this
-is the one that makes people sick.
+A second GT run, the noise floor, scores flicker 0.47 and zero on everything else. A repeated M4 fill 2 run matches
+its first run to the precision shown.
 
-![M0 turn](docs/img/turn_M0.jpg)
+Every frame *i* is compared with GT's frame *i*:
+- **LPIPS** (learned perceptual distance) and **PSNR**: the image error of each frame.
+- **Misregistration:** the median optical-flow distance from GT's frame to the method's, over textured pixels the method
+  covers. This is "the world is in the wrong place". For M0 it tracks the logged eye–camera rotation (correlation 0.89).
+- **Slip:** how fast the image slides against the world, that is, the method's frame-to-frame motion minus GT's.
+  World-locked is 0. A head-locked image slips at the head's speed, and judder shows up here too.
+- **Flicker:** temporal warping error. The previous frame is carried along GT's motion and compared with this one, as
+  mean |RGB| (0–255). It rises with holes that open and close, popping content and judder.
 
-**M1** (M2 to M4 behave the same here). The old frame is put back where it belongs in the world, nearly exactly for a
-pure turn. The part of the new view that the robot camera hasn't seen yet is black, at the right edge. It fills in as
-the neck catches up.
+![Misregistration over time](docs/img/replay/misregistration.png)
 
-![M1 turn](docs/img/turn_M1.jpg)
+What the numbers say:
+- **The baseline fails in motion, not at rest.** With the head still, M0 is 1.2° off, close to the spheres. In the turns
+  it averages 5–6.5°, peaks at 15° and slips at over 100°/s. A still screenshot shows none of this.
+- **Rotation compensation is the largest single gain.** The spheres cut misregistration 3×, slip 6× and flicker 3×.
+  What is left is parallax, and it doubles during the lean.
+- **Depth fixes the registration.** M4 is about 10× better than the spheres. But M3 alone leaves large holes, which
+  make it the second worst on LPIPS.
+- **Among the M4 fills, motion and image metrics disagree.** Fill 2 (memory) is the most world-locked. Fill 0 (sphere)
+  has the best LPIPS and the least flicker: memory flickers more at rest and shows stale fan and hand fragments.
+- **No single number ranks the methods.** Misregistration puts M3 above the spheres, while LPIPS and PSNR put it below
+  them.
 
-### Metrics
+The full write-up, with per-segment tables, the determinism check and the limits, is
+[`docs/eval/2026-11-05-replay/README.md`](docs/eval/2026-11-05-replay/README.md). To reproduce, run
+`Tools/replay_run.ps1`, then `replay_metrics.py`, `replay_gifs.py` and `replay_plot.py`.
 
-Each frozen state is rendered with every method and compared with GT. The comparison covers 12 desktop scenes,
-11 presentations, two depth models and a VR frame-rate run per method. Regions come from geometry, so they are the
-same for every method:
-- holes even with exact depth (disocclusions);
-- holes only from degraded depth;
-- pixels outside the frame.
+### Frozen-frame metrics (12 scenes)
 
-Mean over the 11 scenes with an offset (4–20 cm, 0–15°), ZEDlike depth:
+The earlier evaluation freezes the remote side at 12 instants with larger eye–camera offsets (4–20 cm, 0–15°) and
+renders every method for exactly that state. It adds region-specific errors and the VR frame rate. Mean over the 11
+scenes with an offset, ZEDlike depth:
 
 | Method | LPIPS ↓ | PSNR dB ↑ | Disocclusion error ↓ | Misregistration px ↓ | False edges % ↓ | VR fps (72 Hz cap) |
 |---|---|---|---|---|---|---|
@@ -238,36 +268,17 @@ Mean over the 11 scenes with an offset (4–20 cm, 0–15°), ZEDlike depth:
 | M4 fill 1 | 0.153 | 23.7 | 34.5 | **0.5** | 11.6 | 69.0 |
 | M4 fill 2 | 0.146 | **24.6** | **25.2** | 0.6 | **9.1** | 57.1 |
 
-What the columns measure:
-- **LPIPS:** learned perceptual distance.
-- **PSNR:** whole-frame pixel fidelity.
-- **Disocclusion error:** mean |RGB| difference (0–255) in the holes that remain even with exact depth.
-- **Misregistration:** the median block-matching shift where real data exists, about 0.09° per px.
-- **False edges:** edges with no GT edge nearby (ghosts, hole borders), as a % of GT edges.
+- **Disocclusion error** is the mean |RGB| difference (0–255) in the holes that remain even with exact depth.
+- **False edges** are edges with no GT edge nearby, such as ghosts and hole borders, as a % of GT edges.
+- **The cost of memory:** with 16 keyframes, M4 fill 2 drops to 57 fps in VR (GT: 68.6 fps on the same setup).
+- **The full write-up** is [`docs/eval/2026-11-04-methods/README.md`](docs/eval/2026-11-04-methods/README.md).
 
-GT itself runs at 68.6 fps on the same setup, which topped out at about 69–70 fps that day.
-
-What these numbers say:
-- **M4 is best on every image metric.**
-- **The three fills are close on LPIPS.**
-  - Memory (fill 2) fills disocclusions best and has the best PSNR.
-  - But it pastes stale content, such as old robot hands and fan blades. At zero offset it is the only method worse
-    than M0.
-  - With a full memory (16 keyframes) it drops to 57 fps in VR.
-- **No single metric ranks the methods.** PSNR puts M3 well above M2, while LPIPS rates them about equal: M3 places
-  everything exactly but leaves dark holes.
-
-The full write-up has the protocol, all 12 scenes, the per-scene tables, the screenshot sheets and the limits:
-[`docs/eval/2026-11-04-methods/README.md`](docs/eval/2026-11-04-methods/README.md). Reproduce it with
-`Content/Python/teleop_eval.py`, `Tools/eval_metrics.py` and `Tools/eval_report.py`.
-
-**What the metrics don't capture yet, and could:**
-- **Time.** Flicker, swimming during head motion, the jump when a new frame arrives, and judder from dropped frames.
-  These need a video metric (e.g. temporal warping error) on recorded motion, not frozen frames.
+**What the metrics don't capture yet:**
 - **Binocular effects.** Each eye is reprojected on its own, so the two eyes can see different holes or ghosts
-  (rivalry, wrong vertical disparity).
+  (rivalry, wrong vertical disparity). Both evaluations are mono.
 - **Where the operator looks.** Errors at the centre of view and on the manipulated object matter more than in the
   periphery.
+- **Real motion.** The trajectory is scripted. `teleop.Replay.Record` records a real one on the Quest for replay.
 - **People.** Ratings from the in-headset blind test (stability, comfort, depth plausibility on 1–7 scales) and task
   measures with the robot hand, such as grasp time and success.
 
@@ -282,25 +293,30 @@ The full write-up has the protocol, all 12 scenes, the per-scene tables, the scr
   help the current eye, or draw fewer of them.
 - **Ghosts of the sphere fill (M4 fill 0).** They are inherent; fill 1 trades them for streaks. A better
   depth-aware inpainting is open.
-- **Temporal and binocular evaluation, and a user study.** See the metric gaps above.
+- **Binocular evaluation, real motion and a user study.** The temporal metrics cover one scripted trajectory on the
+  desktop (mono). Next: record real operator motion on the Quest (`teleop.Replay.Record`), replay it, and measure
+  both eyes. See the metric gaps above.
+- **Flicker of the fills.** Memory (fill 2) flickers more than the sphere fill while the head is still, and fill 1's
+  streaks flicker most. Both need temporal stabilization.
 - **Moving objects.** No reprojection can remove their latency. That is the next step in the brief (S8): interaction
   latency and a predicted "ghost hand".
 - **Validate the models against real data.** Latency traces from the real network, depth from the real stereo camera
   (e.g. ZED), and the real robot's neck and waist dynamics.
-- **Measure in the headset.** The method evaluation ran on the desktop (mono); VR frame rates came from the simulator.
+- **Measure in the headset.** Both evaluations ran on the desktop (mono); VR frame rates came from the simulator.
 
 ## Repository layout
 
 ```
 Reprojection/                  UE 5.7 project (Reprojection.uproject)
   Source/Reprojection/         game module: game mode, operator pawn, robot head, presenter, latency and depth models,
-                               keyframe memory, observer view, CVars
+                               keyframe memory, observer view, trajectory replay, CVars
   Source/ReprojectionShaders/  maps Shaders/ to /Reprojection so material Custom nodes can #include plain HLSL
   Shaders/Teleop/              camera model, presentation (M0-M2, M4 fills), depth mesh (M3), depth degradation, memory
   Content/Python/              builds the materials from code (teleop_materials.py); evaluation and test scripts
   Plugins/MCPUnreal/           editor plugin for the mcp-unreal MCP server
-Tools/                         evaluation metrics and the HTML report generator
-docs/                          evaluation write-ups and README images
+Tools/                         evaluation: frozen-scene metrics and report; trajectory replay (replay_*: trajectory,
+                               runs, temporal metrics, GIFs, plot)
+docs/                          evaluation write-ups (eval/) and README images (img/replay/)
 HANDOFF.md                     original design brief (Chinese)
 CLAUDE.md                      working notes for coding agents: code map, conventions, verified results
 ```

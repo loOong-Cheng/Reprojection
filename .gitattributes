@@ -38,6 +38,8 @@
 *.tiff      filter=lfs diff=lfs merge=lfs -text
 *.dds       filter=lfs diff=lfs merge=lfs -text
 *.ico       filter=lfs diff=lfs merge=lfs -text
+*.gif       filter=lfs diff=lfs merge=lfs -text
+*.webp      filter=lfs diff=lfs merge=lfs -text
 
 # --- Source art / 3D -------------------------------------------
 *.fbx       filter=lfs diff=lfs merge=lfs -text

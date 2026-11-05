@@ -4,6 +4,7 @@
 #include "GameFramework/GameModeBase.h"
 #include "TeleopLatencyModel.h"
 #include "TeleopLogger.h"
+#include "TeleopReplay.h"
 #include "TeleopTypes.h"
 #include "TeleopGameMode.generated.h"
 
@@ -30,6 +31,8 @@ class REPROJECTION_API ATeleopGameMode : public AGameModeBase
 public:
 	ATeleopGameMode();
 
+	/** Starts a trajectory replay given on the command line (FTeleopReplay) before any actor begins play. */
+	virtual void InitGame(const FString& MapName, const FString& Options, FString& ErrorMessage) override;
 	virtual AActor* FindPlayerStart_Implementation(AController* Player, const FString& IncomingName) override;
 	virtual void RestartPlayer(AController* NewPlayer) override;
 	virtual void BeginPlay() override;
@@ -56,6 +59,9 @@ public:
 	void HandleGrabInput(bool bLeft, bool bPressed);
 
 	FTeleopLatencyModel& GetLatencyModel() { return LatencyModel; }
+
+	/** Trajectory replay / recording (Tools/replay_run.ps1, teleop.Replay.Record). */
+	FTeleopReplay& GetReplay() { return Replay; }
 
 	/** Per-session CSV logger (null before the session starts). */
 	FTeleopLogger* GetLogger() const { return Logger.Get(); }
@@ -103,6 +109,7 @@ private:
 
 	FTeleopLatencyModel LatencyModel;
 	TUniquePtr<FTeleopLogger> Logger;
+	FTeleopReplay Replay;
 
 	void RearmAutoRecenter(const TCHAR* Reason);
 

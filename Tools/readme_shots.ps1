@@ -5,13 +5,16 @@
 # target, PNG). Tools/readme_compose.py puts them into the spectator layout.
 # Example: .\readme_shots.ps1 -Tag move -OffY 15 ; .\readme_shots.ps1 -Tag turn -Yaw 25 -Methods "GT|teleop.Method 5","M0|teleop.Method 0"
 param([string]$Tag = "move", [double]$OffX = 0, [double]$OffY = 15, [double]$OffZ = 0, [double]$Yaw = 0,
-      [string]$OutDir = (Join-Path $PSScriptRoot "..\Reprojection\Saved\ReadmeShots"),
+      [string]$OutDir = "",
       [string[]]$Methods = @("GT|teleop.Method 5", "M0|teleop.Method 0", "M1|teleop.Method 1", "M2|teleop.Method 2",
         "M3|teleop.Method 3", "M4f0|teleop.Method 4;teleop.M4.Fill 0", "M4f1|teleop.Method 4;teleop.M4.Fill 1",
         "M4f2|teleop.Method 4;teleop.M4.Fill 2"))
+# ($PSScriptRoot is empty in parameter defaults on Windows PowerShell 5.1.)
+$Root = Split-Path -Parent $MyInvocation.MyCommand.Path
+if (-not $OutDir) { $OutDir = Join-Path $Root "..\Reprojection\Saved\ReadmeShots" }
 New-Item -ItemType Directory -Force $OutDir | Out-Null
 $OutDir = (Resolve-Path $OutDir).Path
-$Log = Join-Path $PSScriptRoot "..\Reprojection\Saved\Logs\Reprojection.log"
+$Log = Join-Path $Root "..\Reprojection\Saved\Logs\Reprojection.log"
 function Post([string]$Route, [hashtable]$Body) {
   [void](Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:8090/api/editor/$Route" -Body ($Body | ConvertTo-Json) -ContentType "application/json")
 }

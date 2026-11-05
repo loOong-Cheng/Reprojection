@@ -39,7 +39,7 @@ enum class ETeleopDevice : uint8
 /** Time-stamped pose stream with interpolated lookup, used to delay poses by the command latency. */
 struct FTeleopPoseHistory
 {
-	/** Times are FPlatformTime::Seconds(). Keeps the last MaxAgeSeconds. */
+	/** Times are TeleopClock::Now(). Keeps the last MaxAgeSeconds. */
 	void Add(double Time, const FTransform& Pose, double MaxAgeSeconds = 2.0);
 
 	/** Pose at Time (interpolated; clamped to the oldest/newest sample). False if empty. */

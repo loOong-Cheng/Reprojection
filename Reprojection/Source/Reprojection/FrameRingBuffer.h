@@ -15,7 +15,7 @@ struct FTeleopFrameMeta
 	UPROPERTY(BlueprintReadOnly, Category = "Teleop")
 	int64 FrameId = -1;
 
-	/** C_i, FPlatformTime::Seconds() when CaptureScene() was issued. */
+	/** C_i, TeleopClock::Now() when CaptureScene() was issued. */
 	UPROPERTY(BlueprintReadOnly, Category = "Teleop")
 	double CaptureTime = 0.0;
 

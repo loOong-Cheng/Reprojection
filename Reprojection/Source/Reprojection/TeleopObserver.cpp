@@ -4,6 +4,7 @@
 #include "Reprojection.h"
 #include "RobotHead.h"
 #include "TeleopCVars.h"
+#include "TeleopClock.h"
 #include "TeleopGameMode.h"
 #include "TeleopOperatorPawn.h"
 #include "TeleopPresenter.h"
@@ -335,7 +336,7 @@ void ATeleopObserver::Tick(float DeltaSeconds)
 	{
 		return;
 	}
-	const double Now = FPlatformTime::Seconds();
+	const double Now = TeleopClock::Now();
 	const double Period = 1.0 / FMath::Clamp(TeleopCVars::ObserverHz.GetValueOnGameThread(), 1.f, 120.f);
 	if (Now - LastCaptureTime >= Period - 0.002)
 	{

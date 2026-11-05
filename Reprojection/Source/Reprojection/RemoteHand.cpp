@@ -2,6 +2,7 @@
 
 #include "Reprojection.h"
 #include "TeleopCVars.h"
+#include "TeleopClock.h"
 #include "TeleopGameMode.h"
 #include "TeleopOperatorPawn.h"
 
@@ -208,7 +209,7 @@ void ARemoteHand::Tick(float DeltaSeconds)
 {
 	Super::Tick(DeltaSeconds);
 
-	const double Now = FPlatformTime::Seconds();
+	const double Now = TeleopClock::Now();
 	ATeleopGameMode* GM = GameMode.Get();
 	ATeleopOperatorPawn* P = Pawn.Get();
 	if (!GM || !P)
@@ -373,7 +374,7 @@ bool ARemoteHand::DoRelease()
 	if (HeldPrimitive && HeldPrimitive->IsSimulatingPhysics())
 	{
 		FVector Linear, AngularDeg;
-		if (WorldHistory.Velocity(FPlatformTime::Seconds(), ThrowVelocityWindow, Linear, AngularDeg))
+		if (WorldHistory.Velocity(TeleopClock::Now(), ThrowVelocityWindow, Linear, AngularDeg))
 		{
 			HeldPrimitive->SetPhysicsLinearVelocity(Linear);
 			HeldPrimitive->SetPhysicsAngularVelocityInDegrees(AngularDeg);

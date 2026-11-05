@@ -1,6 +1,7 @@
 #include "TeleopProps.h"
 
 #include "TeleopCVars.h"
+#include "TeleopClock.h"
 
 #include "Components/StaticMeshComponent.h"
 #include "Engine/StaticMesh.h"
@@ -73,7 +74,7 @@ UStaticMeshComponent* ATeleopProps::MakeMesh(const TCHAR* Name, UStaticMesh* Mes
 void ATeleopProps::BeginPlay()
 {
 	Super::BeginPlay();
-	StartTime = FPlatformTime::Seconds();
+	StartTime = TeleopClock::Now();
 
 	static const FSoftObjectPath CheckerPath(TEXT("/Game/Teleop/Materials/M_TeleopChecker.M_TeleopChecker"));
 	if (UMaterialInterface* CheckerMat = Cast<UMaterialInterface>(CheckerPath.TryLoad()))
@@ -94,7 +95,7 @@ void ATeleopProps::BeginPlay()
 void ATeleopProps::Tick(float DeltaSeconds)
 {
 	Super::Tick(DeltaSeconds);
-	const double Now = FPlatformTime::Seconds();
+	const double Now = TeleopClock::Now();
 	if (TeleopCVars::DebugFreeze.GetValueOnGameThread() != 0 && LastTickTime > 0.0)
 	{
 		StartTime += Now - LastTickTime; // frozen: the animation time stands still

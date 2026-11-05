@@ -3,6 +3,7 @@
 #include "FrameRingBuffer.h"
 #include "Reprojection.h"
 #include "TeleopCVars.h"
+#include "TeleopClock.h"
 #include "TeleopDepthDegrader.h"
 #include "TeleopGameMode.h"
 #include "TeleopLogger.h"
@@ -104,7 +105,7 @@ void ARobotHead::Tick(float DeltaSeconds)
 {
 	Super::Tick(DeltaSeconds);
 
-	const double Now = FPlatformTime::Seconds();
+	const double Now = TeleopClock::Now();
 	if (TeleopCVars::DebugFreeze.GetValueOnGameThread() != 0)
 	{
 		return; // evaluation freeze: the robot and its cameras stand still (captures resync when it ends)

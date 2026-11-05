@@ -4,6 +4,7 @@
 #include "Reprojection.h"
 #include "RobotHead.h"
 #include "TeleopCVars.h"
+#include "TeleopClock.h"
 #include "TeleopDepthDegrader.h"
 #include "TeleopGameMode.h"
 #include "TeleopLatencyModel.h"
@@ -116,7 +117,7 @@ static FAutoConsoleCommandWithWorld GTeleopMemoryStats(TEXT("teleop.Memory.Stats
 	{
 		if (ATeleopPresenter* P = FindPresenter(W))
 		{
-			if (UTeleopMemory* M = P->GetMemory()) { UE_LOG(LogTeleop, Log, TEXT("%s"), *M->Describe(FPlatformTime::Seconds())); }
+			if (UTeleopMemory* M = P->GetMemory()) { UE_LOG(LogTeleop, Log, TEXT("%s"), *M->Describe(TeleopClock::Now())); }
 		}
 	}));
 
@@ -299,7 +300,7 @@ void ATeleopPresenter::Tick(float DeltaSeconds)
 	{
 		return;
 	}
-	const double Now = FPlatformTime::Seconds();
+	const double Now = TeleopClock::Now();
 	if (SessionStart <= 0.0)
 	{
 		SessionStart = Now;
@@ -516,7 +517,7 @@ void ATeleopPresenter::UpdateMaterialParams()
 		Params.DispScale = FocalPx * 6.4f; // reference f * b of a 64 mm pair, as for the M3 rubber-sheet test
 		Params.EdgeDispPx = TeleopCVars::M3EdgeDispPx.GetValueOnGameThread();
 		const bool bMaskView = TeleopCVars::DebugMaskView.GetValueOnGameThread() != 0;
-		Memory->Update(FPlatformTime::Seconds(), Buffer, ShownSlot, Fill == 2 && Meta.bDepthValid && !bMaskView, Params);
+		Memory->Update(TeleopClock::Now(), Buffer, ShownSlot, Fill == 2 && Meta.bDepthValid && !bMaskView, Params);
 	}
 }
 
@@ -621,9 +622,15 @@ void ATeleopPresenter::UpdateAdaptiveRadius(double Now, float DeltaSeconds)
 	{
 		if (Readback->bPending)
 		{
-			// Poll on the render thread; copy the window out when the GPU is done.
-			ENQUEUE_RENDER_COMMAND(TeleopRadiusPoll)([State = Readback](FRHICommandListImmediate&)
+			// Poll on the render thread; copy the window out when the GPU is done. In a fixed-step replay, wait for the GPU
+			// instead, so the result always arrives on the same frame and every run of a trajectory gets the same R.
+			const bool bWait = TeleopClock::IsFixedStep();
+			ENQUEUE_RENDER_COMMAND(TeleopRadiusPoll)([State = Readback, bWait](FRHICommandListImmediate& RHICmdList)
 			{
+				if (bWait && State->Readback && !State->Readback->IsReady())
+				{
+					RHICmdList.BlockUntilGPUIdle();
+				}
 				if (!State->Readback || !State->Readback->IsReady())
 				{
 					return;
@@ -653,6 +660,10 @@ void ATeleopPresenter::UpdateAdaptiveRadius(double Now, float DeltaSeconds)
 				}
 				State->bPending = false;
 			});
+			if (bWait)
+			{
+				FlushRenderingCommands();
+			}
 		}
 		return;
 	}
@@ -741,7 +752,7 @@ void ATeleopPresenter::CycleMethod()
 {
 	if (BlindTest.IsActive())
 	{
-		BlindTest.Confirm(FPlatformTime::Seconds());
+		BlindTest.Confirm(TeleopClock::Now());
 		return;
 	}
 	// GT > M1 > M2 > M3 > M4 > M0 > GT: the session starts in GT, and the head-locked M0 comes last (user, 2026-11-04).
@@ -803,7 +814,7 @@ void ATeleopPresenter::ToggleBlindTest()
 	else
 	{
 		ATeleopGameMode* GM = GameMode.Get();
-		BlindTest.Start(FPlatformTime::Seconds(), GM ? GM->GetLogger() : nullptr);
+		BlindTest.Start(TeleopClock::Now(), GM ? GM->GetLogger() : nullptr);
 	}
 }
 
@@ -817,7 +828,7 @@ void ATeleopPresenter::AdjustRating(int32 Direction)
 // ---------------------------------------------------------------------------------------------------------------
 // Logging, stats, HUD
 
-void ATeleopPresenter::LogEvalState(const FString& Tag) const
+bool ATeleopPresenter::GetLeftEyeAndCamera(FTransform& OutEye, FTransform& OutCam) const
 {
 	const ATeleopGameMode* GM = GameMode.Get();
 	const ATeleopOperatorPawn* P = Pawn.Get();
@@ -825,16 +836,43 @@ void ATeleopPresenter::LogEvalState(const FString& Tag) const
 	FTransform HeadLocal;
 	if (!GM || !P || !Buffer || ShownSlot == INDEX_NONE || !P->GetLatestLocalPose(ETeleopDevice::Head, HeadLocal))
 	{
-		UE_LOG(LogTeleop, Log, TEXT("[eval] tag=%s no state"), *Tag);
-		return;
+		return false;
 	}
-	const FTeleopFrameMeta& Meta = Buffer->GetMeta(ShownSlot);
 	// The left eye against the left camera (the frame a mono desktop view and the HMD's left eye use). Eye = head centre
 	// minus half the baseline (taken as the IPD) along the head's right axis.
 	const float HalfIpdCm = FMath::Clamp(TeleopCVars::BaselineMm.GetValueOnGameThread(), 0.f, 200.f) * 0.05f;
 	const FTransform HeadRemote = HeadLocal * GM->GetLocalToRemote();
-	const FTransform Eye(HeadRemote.GetRotation(), HeadRemote.TransformPositionNoScale(FVector(0.f, -HalfIpdCm, 0.f)));
-	const FTransform& Cam = Meta.EyeWorld[0];
+	OutEye = FTransform(HeadRemote.GetRotation(), HeadRemote.TransformPositionNoScale(FVector(0.f, -HalfIpdCm, 0.f)));
+	OutCam = Buffer->GetMeta(ShownSlot).EyeWorld[0];
+	return true;
+}
+
+bool ATeleopPresenter::GetEyeCameraOffset(FVector& OutOffsetCm, float& OutRotDeg) const
+{
+	FTransform Eye, Cam;
+	if (!GetLeftEyeAndCamera(Eye, Cam))
+	{
+		return false;
+	}
+	OutOffsetCm = Cam.InverseTransformPositionNoScale(Eye.GetLocation());
+	OutRotDeg = FMath::RadiansToDegrees((Cam.GetRotation().Inverse() * Eye.GetRotation()).GetAngle());
+	return true;
+}
+
+float ATeleopPresenter::GetShownSphereRadiusCm() const
+{
+	return UsesAdaptiveRadius(ActiveMethod) ? AdaptiveRadiusCm : TeleopCVars::SphereRadiusCm.GetValueOnGameThread();
+}
+
+void ATeleopPresenter::LogEvalState(const FString& Tag) const
+{
+	const ATeleopGameMode* GM = GameMode.Get();
+	FTransform Eye, Cam;
+	if (!GM || !GetLeftEyeAndCamera(Eye, Cam))
+	{
+		UE_LOG(LogTeleop, Log, TEXT("[eval] tag=%s no state"), *Tag);
+		return;
+	}
 	const FVector Off = Cam.InverseTransformPositionNoScale(Eye.GetLocation()); // x fwd, y right, z up, cm
 	const FQuat Rel = Cam.GetRotation().Inverse() * Eye.GetRotation();
 	const FRotator RelRot = Rel.Rotator();
@@ -843,7 +881,7 @@ void ATeleopPresenter::LogEvalState(const FString& Tag) const
 	const FRotator EyeRot = Eye.GetRotation().Rotator() - GM->GetStationTransform().Rotator();
 
 	auto Median = [](TArray<float> V) { V.Sort(); return V.Num() ? V[V.Num() / 2] : 0.f; };
-	const double Now = FPlatformTime::Seconds();
+	const double Now = TeleopClock::Now();
 	const double AgeRef = FreezeStartTime > 0.0 ? FreezeStartTime : Now;
 	UE_LOG(LogTeleop, Log, TEXT("[eval] tag=%s method=%s label=\"%s\" frozen=%d age_ms=%.1f offset_cm=%.2f,%.2f,%.2f offset_len_cm=%.2f rot_deg=%.2f rel_ypr=%.2f,%.2f,%.2f eye_station=%.1f,%.1f,%.1f eye_ypr=%.1f,%.1f R_fixed=%.0f R_adapt=%.1f keyframes=%d depth=%s latency=%s gpu_ms=%.2f frame_ms=%.2f frames=%d"),
 		*Tag, MethodShort(ActiveMethod), *MethodLabel(), FreezeStartTime > 0.0 ? 1 : 0, (AgeRef - ShownCaptureTime) * 1000.0,
