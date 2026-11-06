@@ -23,7 +23,7 @@ import tempfile
 from PIL import Image, ImageDraw, ImageFont
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from replay_trajectory import SEGMENTS  # noqa: E402
+from replay_trajectory import SEGMENTS, read_segments  # noqa: E402
 
 ORDER = ["GT", "M0", "M1", "M2", "M3", "M4f0", "M4f1", "M4f2"]
 LABEL = {
@@ -38,6 +38,8 @@ LABEL = {
 }
 SHORT = {"GT": "GT (reference, now)", "M0": "M0 head-locked (baseline)", "M1": "M1 sphere R 1 m", "M2": "M2 sphere adaptive R",
          "M3": "M3 depth mesh", "M4f0": "M4 + sphere fill", "M4f1": "M4 + nearest background", "M4f2": "M4 + keyframe memory"}
+TINY = {"GT": "GT (now)", "M0": "M0 baseline", "M1": "M1 sphere 1 m", "M2": "M2 adaptive sphere", "M3": "M3 mesh",
+        "M4f0": "M4 sphere fill", "M4f1": "M4 nearest bg", "M4f2": "M4 memory"}  # grid labels for tiles < 232 px
 BG = (16, 18, 20)
 FG = (235, 235, 235)
 DIM = (150, 155, 160)
@@ -110,6 +112,7 @@ def main():
     # GIF delays are whole 1/100 s: 72 Hz / 6 = 12 Hz content -> 8 cs (12.5 fps, 1.04x real time).
     fps = "100/%d" % max(2, round(100 * a.every / a.hz))
     os.makedirs(a.out, exist_ok=True)
+    SEGMENTS[:] = read_segments(os.path.join(a.run, "trajectory.csv"))
     methods = [m for m in ORDER if os.path.isdir(os.path.join(a.run, m))]
     states = {m: read_csv(os.path.join(a.run, m, "frames.csv")) for m in methods}
     metrics = {}
@@ -123,13 +126,22 @@ def main():
     t_start, t_end = t_of(idx[0]), t_of(n - 1)
     f_head, f_small = font(16, True), font(14)
 
+    def reg_text(m, i, fmt):
+        """Live misregistration, or 'view lost' where too little of GT's view was found (replay_metrics.MIN_MATCHED)."""
+        r = metrics.get((m, i), {})
+        if r.get("reg_deg"):
+            return fmt % float(r["reg_deg"])
+        if r.get("matched") and float(r["matched"]) < 0.05:
+            return "view lost"
+        return ""
+
     def info_for(m, i):
         age = float(states[m][i]["age_ms"])
-        reg = metrics.get((m, i), {}).get("reg_deg", "")
         s = "shown frame %.0f ms old" % age
         if m == "GT":
             return "the remote world now (no latency)"
-        return s + ("   misregistration %.1f deg" % float(reg) if reg else "")
+        reg = reg_text(m, i, "misregistration %.1f deg")
+        return s + ("   " + reg if reg else "")
 
     def eye(m, i, w):
         return Image.open(os.path.join(a.run, m, "eye_%05d.png" % i)).convert("RGB").resize((w, w * 9 // 16), Image.LANCZOS)
@@ -177,11 +189,12 @@ def main():
                         text, col = "Third-person view", DIM
                     else:
                         img = eye(m, i, gw)
-                        reg = metrics.get((m, i), {}).get("reg_deg", "")
-                        text = SHORT[m] + ("   %.1f deg" % float(reg) if reg and m != "GT" else "")
-                        col = FG
+                        reg = reg_text(m, i, "%.1f deg") if m != "GT" else ""
+                        text, col = (SHORT if gw >= 232 else TINY)[m], FG
                     sheet.paste(img, (x, y + lab))
                     d.text((x + 5, y + 2), text, fill=col, font=f_lab)
+                    if m != "TPV" and reg:
+                        d.text((x + gw - 5 - d.textlength(reg, font=f_lab), y + 2), reg, fill=ACCENT, font=f_lab)
                 age = float(states["M0"][i]["age_ms"]) if "M0" in states else 0.0
                 footer(d, 0, rows_n * (gh + lab), sheet.width, foot, t_of(i), t_start, t_end,
                        "shown frame %.0f ms old   deg = misregistration" % age, f_small)

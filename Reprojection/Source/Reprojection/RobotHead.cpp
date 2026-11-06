@@ -110,6 +110,11 @@ void ARobotHead::Tick(float DeltaSeconds)
 	{
 		return; // evaluation freeze: the robot and its cameras stand still (captures resync when it ends)
 	}
+	if (ATeleopGameMode* GM = GameMode.Get(); GM && GM->HasBaseMotion())
+	{
+		// Driving base: it executes the operator's base command after the command latency.
+		SetActorTransform(GM->GetRobotBaseAt(Now - GM->GetLatencyModel().GetCommandLatencySeconds()));
+	}
 	UpdateNeck(Now, DeltaSeconds);
 	UpdateCameraRig();
 
@@ -162,7 +167,7 @@ void ARobotHead::UpdateNeck(double Now, float DeltaSeconds)
 		return;
 	}
 	// Target head pose, relative to the robot base.
-	const FTransform TargetWorld = LocalHead * GM->GetLocalToRemote();
+	const FTransform TargetWorld = LocalHead * GM->GetLocalToRemoteAt(Now - CmdLatency);
 	const FTransform TargetRel = TargetWorld.GetRelativeTransform(Base->GetComponentTransform());
 	const FRotator TargetRot = TargetRel.Rotator();
 

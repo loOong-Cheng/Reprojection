@@ -141,6 +141,8 @@ bool FTeleopTrajectory::LoadCsv(const FString& Path, FString& OutError)
 		};
 		FTeleopTrajectorySample S;
 		S.Time = Get(TEXT("t"));
+		S.bHasBase = Column.Contains(TEXT("bx")) || Column.Contains(TEXT("by")) || Column.Contains(TEXT("byaw"));
+		S.Base = FTransform(FRotator(0.0, Get(TEXT("byaw")), 0.0), FVector(Get(TEXT("bx")), Get(TEXT("by")), 0.0));
 		for (int32 p = 0; p < 3; ++p)
 		{
 			double V[6];
@@ -235,6 +237,8 @@ FTeleopTrajectorySample FTeleopTrajectory::Sample(double Time) const
 	{
 		PoseOf(S, p) = LerpPose(PoseOf(A, p), PoseOf(B, p), Alpha);
 	}
+	S.Base = LerpPose(A.Base, B.Base, Alpha);
+	S.bHasBase = A.bHasBase;
 	for (int32 h = 0; h < 2; ++h)
 	{
 		for (int32 f = 0; f < 4; ++f)
@@ -298,6 +302,8 @@ void FTeleopReplay::Init(ATeleopGameMode* InGameMode)
 	{
 		FParse::Value(Cmd, TEXT("TeleopReplayFrom="), OutFrom);
 		FParse::Value(Cmd, TEXT("TeleopReplayObsEvery="), ObsEvery);
+		FParse::Value(Cmd, TEXT("TeleopReplayScale="), SaveScale);
+		SaveScale = FMath::Clamp(SaveScale, 1, 8);
 		IFileManager::Get().MakeDirectory(*OutDir, true);
 		FModuleManager::Get().LoadModule(TEXT("ImageWrapper")); // the PNG writes run on worker threads
 		FramesCsv.Reset(IFileManager::Get().CreateFileWriter(*FPaths::Combine(OutDir, TEXT("frames.csv"))));
@@ -388,7 +394,7 @@ void FTeleopReplay::OnScreenshot(int32 Width, int32 Height, const TArray<FColor>
 	{
 		return;
 	}
-	QueueWrite(FPaths::Combine(OutDir, FString::Printf(TEXT("eye_%05d.png"), PendingEyeFrame)), Width, Height, Bitmap);
+	QueueWrite(FPaths::Combine(OutDir, FString::Printf(TEXT("eye_%05d.png"), PendingEyeFrame)), Width, Height, Bitmap, SaveScale);
 	PendingEyeFrame = INDEX_NONE;
 }
 
@@ -415,7 +421,7 @@ void FTeleopReplay::CaptureObserver(int32 FrameIndex)
 	FTextureRenderTargetResource* Resource = RT->GameThread_GetRenderTargetResource();
 	if (Resource && Resource->ReadPixels(Pixels)) // waits for this frame's capture
 	{
-		QueueWrite(FPaths::Combine(OutDir, FString::Printf(TEXT("obs_%05d.png"), FrameIndex)), RT->SizeX, RT->SizeY, MoveTemp(Pixels));
+		QueueWrite(FPaths::Combine(OutDir, FString::Printf(TEXT("obs_%05d.png"), FrameIndex)), RT->SizeX, RT->SizeY, MoveTemp(Pixels), SaveScale);
 	}
 }
 
@@ -494,7 +500,7 @@ void FTeleopReplay::Finish()
 	}
 }
 
-void FTeleopReplay::QueueWrite(FString Path, int32 Width, int32 Height, TArray<FColor> Pixels)
+void FTeleopReplay::QueueWrite(FString Path, int32 Width, int32 Height, TArray<FColor> Pixels, int32 Scale)
 {
 	Writes.RemoveAll([](const UE::Tasks::FTask& Task) { return Task.IsCompleted(); });
 	while (Writes.Num() >= 32)
@@ -502,14 +508,43 @@ void FTeleopReplay::QueueWrite(FString Path, int32 Width, int32 Height, TArray<F
 		Writes[0].Wait(); // bound the memory held by queued frames
 		Writes.RemoveAt(0);
 	}
-	Writes.Add(UE::Tasks::Launch(UE_SOURCE_LOCATION, [Path = MoveTemp(Path), Width, Height, Pixels = MoveTemp(Pixels)]() mutable
+	Writes.Add(UE::Tasks::Launch(UE_SOURCE_LOCATION, [Path = MoveTemp(Path), Width, Height, Pixels = MoveTemp(Pixels), Scale]() mutable
 	{
+		int32 W = Width, H = Height;
+		if (Scale > 1)
+		{
+			// Box filter, Scale x Scale texels per output pixel.
+			W = Width / Scale;
+			H = Height / Scale;
+			TArray<FColor> Small;
+			Small.SetNumUninitialized(W * H);
+			for (int32 y = 0; y < H; ++y)
+			{
+				for (int32 x = 0; x < W; ++x)
+				{
+					uint32 Sum[3] = { 0, 0, 0 };
+					for (int32 j = 0; j < Scale; ++j)
+					{
+						const FColor* Row = &Pixels[(y * Scale + j) * Width + x * Scale];
+						for (int32 i = 0; i < Scale; ++i)
+						{
+							Sum[0] += Row[i].R;
+							Sum[1] += Row[i].G;
+							Sum[2] += Row[i].B;
+						}
+					}
+					const uint32 N = Scale * Scale;
+					Small[y * W + x] = FColor(uint8((Sum[0] + N / 2) / N), uint8((Sum[1] + N / 2) / N), uint8((Sum[2] + N / 2) / N), 255);
+				}
+			}
+			Pixels = MoveTemp(Small);
+		}
 		for (FColor& C : Pixels)
 		{
 			C.A = 255; // scene captures leave alpha at 0
 		}
 		TArray64<uint8> Png;
-		FImageUtils::PNGCompressImageArray(Width, Height, TArrayView64<const FColor>(Pixels.GetData(), Pixels.Num()), Png);
+		FImageUtils::PNGCompressImageArray(W, H, TArrayView64<const FColor>(Pixels.GetData(), Pixels.Num()), Png);
 		FFileHelper::SaveArrayToFile(Png, *Path);
 	}));
 }

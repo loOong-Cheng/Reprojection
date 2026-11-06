@@ -51,25 +51,38 @@ Each method's frame *i* is compared with GT's frame *i*.
 | Metric | Definition | What it catches |
 |---|---|---|
 | **PSNR**, **LPIPS** | per frame against GT. LPIPS uses AlexNet on 640×360, every third frame. | overall image error, holes, ghosts |
-| **Misregistration** (°) | median optical-flow distance GT<sub>i</sub> → M<sub>i</sub> (OpenCV DIS) over textured GT pixels that the method covers (holes excluded), converted to angle | the world shown in the wrong place |
+| **Misregistration** (°) | median angle between where content is in GT<sub>i</sub> and where it is in M<sub>i</sub> (optical flow GT<sub>i</sub> → M<sub>i</sub>), over textured GT pixels whose content M<sub>i</sub> shows | the world shown in the wrong place |
 | **Slip** (°/s) | median of \|flow(M<sub>i−1</sub>→M<sub>i</sub>) − flow(GT<sub>i−1</sub>→GT<sub>i</sub>)\| × 72 Hz | the image sliding against the world: swimming, head-locking, judder |
 | **Flicker** (0–255) | warping error: M<sub>i−1</sub> warped to frame *i* with GT's flow vs M<sub>i</sub>, mean \|RGB\|, on pixels where GT itself warps consistently | holes opening and closing, popping content, judder |
 
-Misregistration was checked against the logged eye–camera rotation for M0: correlation 0.89. At t = 2.0 s it measured
-12.3°, against 10.2° of rotation plus parallax.
+**How misregistration is measured.**
+- The flow is OpenCV DIS. It is also started from a homography fitted to ORB feature matches, which is exact for a camera
+  rotation. Whichever flow warps better is kept, so gaps of tens of degrees are found.
+- Each displacement is converted to the exact angle between the two view rays.
+- Only content the method shows is scored: the flow must be forward-backward consistent within 1 px. Holes,
+  disocclusions and areas outside the robot frame drop out; LPIPS, PSNR and flicker see them.
+- Checks:
+  - Synthetic camera rotations of 1–40° measure within 2%.
+  - For M0, it tracks the logged eye–camera rotation (correlation 0.89; at t = 2.0 s, 10.1° measured vs 10.2°
+    rotated).
+  - A 1–4 px consistency tolerance changes M0–M2 by under 10%; M3 and M4 stay sub-pixel.
+- **Correction (2026-11-05):** the first version used DIS alone and pixel distance × the angle of a centre pixel. It
+  read about 25% high at small angles and lost track above about 15° (a 20° rotation measured 3.5°). It also counted
+  flow guessed inside holes, because the holes show the dark operator room, not black. The matrix tests exposed this.
+  All numbers here are from the corrected metric; LPIPS, PSNR and flicker did not change.
 
 ### Whole trajectory
 
 | Method | PSNR dB ↑ (mean / worst 5%) | LPIPS ↓ (mean / worst 5%) | Misregistration ° ↓ (mean / p95) | Slip °/s ↓ (mean / p95) | Flicker ↓ |
 |---|---|---|---|---|---|
-| GT2 (repeat run, floor) | 97.0 / 79.9 | 0.000 / 0.000 | 0.00 / 0.00 | 0.0 / 0.0 | 0.47 |
-| **M0** head-locked (baseline) | 13.3 / 10.7 | 0.367 / 0.611 | 3.75 / 11.15 | 24.3 / 105.8 | 5.18 |
-| M1 sphere, R 1 m | 17.2 / 13.8 | 0.206 / 0.339 | 1.28 / 2.92 | 4.2 / 14.6 | 1.82 |
-| M2 sphere, adaptive R | 17.6 / 14.3 | 0.211 / 0.346 | 1.34 / 3.06 | 4.5 / 15.4 | 1.79 |
-| M3 depth mesh | 15.8 / 15.0 | 0.315 / 0.372 | 0.22 / 0.34 | 3.2 / 7.7 | 2.40 |
-| M4 fill 0 (sphere) | **20.0** / 17.5 | **0.161** / **0.219** | 0.12 / 0.22 | 2.4 / 5.7 | **1.64** |
-| M4 fill 1 (nearest background) | 19.4 / 17.6 | 0.197 / 0.243 | 0.14 / 0.22 | 2.7 / 6.4 | 2.32 |
-| M4 fill 2 (keyframe memory) | 19.9 / **18.2** | 0.185 / 0.221 | **0.10** / **0.14** | **2.1** / **4.6** | 1.76 |
+| GT2 (repeat run, floor) | 97.0 / 79.9 | 0.000 / 0.000 | 0.00 / 0.00 | 0.0 / 0.0 | 0.46 |
+| **M0** head-locked (baseline) | 13.3 / 10.7 | 0.367 / 0.611 | 3.24 / 9.59 | 23.4 / 103.1 | 5.16 |
+| M1 sphere, R 1 m | 17.2 / 13.8 | 0.206 / 0.339 | 1.07 / 2.50 | 2.8 / 7.9 | 1.79 |
+| M2 sphere, adaptive R | 17.6 / 14.3 | 0.211 / 0.346 | 1.07 / 2.54 | 2.4 / 5.7 | 1.77 |
+| M3 depth mesh | 15.8 / 15.0 | 0.315 / 0.372 | **0.03** / **0.04** | 2.1 / 4.6 | 2.38 |
+| M4 fill 0 (sphere) | **20.0** / 17.5 | **0.161** / **0.219** | 0.04 / 0.05 | 1.9 / 4.0 | **1.63** |
+| M4 fill 1 (nearest background) | 19.4 / 17.6 | 0.197 / 0.243 | 0.04 / 0.05 | 2.1 / 4.6 | 2.31 |
+| M4 fill 2 (keyframe memory) | 19.9 / **18.2** | 0.185 / 0.221 | 0.04 / 0.05 | **1.7** / **3.5** | 1.75 |
 
 ![Misregistration over time](../../img/replay/misregistration.png)
 
@@ -82,37 +95,40 @@ Misregistration (°):
 
 | Method | still | turn right | reach, grab | carry, look back | drop | lean right | quick look left | hold |
 |---|---|---|---|---|---|---|---|---|
-| M0 | 1.17 | 6.48 | 1.38 | 5.19 | 1.93 | 5.39 | 5.99 | 1.47 |
-| M1 | 1.02 | 0.96 | 1.01 | 1.07 | 1.22 | 2.30 | 1.16 | 1.03 |
-| M2 | 1.08 | 0.95 | 1.16 | 1.17 | 1.27 | 2.34 | 1.21 | 1.07 |
-| M3 | 0.13 | 0.20 | 0.19 | 0.25 | 0.29 | 0.28 | 0.21 | 0.16 |
-| M4 fill 0 | 0.08 | 0.11 | 0.10 | 0.14 | 0.14 | 0.18 | 0.14 | 0.08 |
-| M4 fill 1 | 0.09 | 0.12 | 0.11 | 0.15 | 0.17 | 0.19 | 0.16 | 0.10 |
-| M4 fill 2 | 0.08 | 0.10 | 0.08 | 0.11 | 0.13 | 0.12 | 0.12 | 0.09 |
+| M0 | 1.12 | 5.42 | 1.26 | 4.28 | 1.71 | 4.60 | 5.35 | 1.34 |
+| M1 | 0.90 | 0.74 | 0.90 | 0.77 | 0.97 | 1.93 | 1.01 | 0.91 |
+| M2 | 0.83 | 0.64 | 1.03 | 0.71 | 0.95 | 1.96 | 1.03 | 0.89 |
+| M3 | 0.03 | 0.04 | 0.03 | 0.03 | 0.04 | 0.03 | 0.04 | 0.03 |
+| M4 fill 0 | 0.04 | 0.04 | 0.04 | 0.04 | 0.04 | 0.04 | 0.04 | 0.04 |
+| M4 fill 1 | 0.04 | 0.04 | 0.04 | 0.04 | 0.04 | 0.04 | 0.04 | 0.04 |
+| M4 fill 2 | 0.04 | 0.04 | 0.04 | 0.04 | 0.04 | 0.04 | 0.05 | 0.04 |
+
+M3 and M4 sit at the measurement floor (0.04° is about 0.6 px at 1280 px): the content they show is in place. Their
+differences are in what fills the holes, which the image metrics and flicker measure.
 
 Slip (°/s):
 
 | Method | still | turn right | reach, grab | carry, look back | drop | lean right | quick look left | hold |
 |---|---|---|---|---|---|---|---|---|
-| M0 | 1.6 | 50.3 | 2.9 | 33.8 | 8.1 | 19.3 | 66.2 | 6.8 |
-| M1 | 1.0 | 4.5 | 1.5 | 4.2 | 1.7 | 10.5 | 6.2 | 0.9 |
-| M2 | 1.1 | 4.6 | 1.6 | 4.3 | 1.8 | 11.1 | 6.7 | 1.0 |
-| M3 | 1.4 | 4.2 | 1.7 | 5.7 | 2.3 | 4.3 | 4.4 | 0.9 |
-| M4 fill 0 | 1.0 | 3.1 | 1.2 | 3.7 | 1.5 | 3.8 | 3.3 | 0.7 |
-| M4 fill 1 | 1.2 | 3.7 | 1.3 | 4.3 | 1.8 | 4.2 | 3.7 | 0.8 |
-| M4 fill 2 | 1.1 | 3.0 | 1.1 | 3.5 | 1.5 | 2.9 | 2.7 | 0.7 |
+| M0 | 1.5 | 50.2 | 2.7 | 32.7 | 7.4 | 17.6 | 63.9 | 6.7 |
+| M1 | 1.2 | 3.4 | 1.3 | 3.1 | 1.7 | 5.7 | 3.9 | 0.8 |
+| M2 | 1.2 | 3.1 | 1.5 | 2.8 | 1.6 | 4.1 | 3.2 | 0.8 |
+| M3 | 1.1 | 3.0 | 1.2 | 3.3 | 1.5 | 2.9 | 2.8 | 0.7 |
+| M4 fill 0 | 1.0 | 2.6 | 1.1 | 2.7 | 1.3 | 2.7 | 2.4 | 0.7 |
+| M4 fill 1 | 1.1 | 3.0 | 1.2 | 3.1 | 1.5 | 3.1 | 2.8 | 0.8 |
+| M4 fill 2 | 1.1 | 2.5 | 1.0 | 2.6 | 1.3 | 2.4 | 2.1 | 0.7 |
 
 Flicker (GT2 floor 0.3–0.6):
 
 | Method | still | turn right | reach, grab | carry, look back | drop | lean right | quick look left | hold |
 |---|---|---|---|---|---|---|---|---|
-| M0 | 1.03 | 10.06 | 1.18 | 7.22 | 3.23 | 5.12 | 11.06 | 1.63 |
-| M1 | 0.89 | 1.94 | 0.86 | 2.08 | 1.85 | 2.92 | 2.63 | 0.70 |
-| M2 | 0.87 | 1.95 | 0.85 | 2.04 | 1.81 | 2.82 | 2.62 | 0.69 |
-| M3 | 1.55 | 2.59 | 2.14 | 3.51 | 2.44 | 2.35 | 2.96 | 1.23 |
-| M4 fill 0 | 1.07 | 1.56 | 1.01 | 1.84 | 1.87 | 2.05 | 2.43 | 0.88 |
-| M4 fill 1 | 1.65 | 2.32 | 1.44 | 2.58 | 2.58 | 2.99 | 3.23 | 1.33 |
-| M4 fill 2 | 1.41 | 1.83 | 1.13 | 1.96 | 2.16 | 2.02 | 2.28 | 1.13 |
+| M0 | 1.03 | 9.98 | 1.18 | 7.12 | 3.23 | 5.12 | 11.04 | 1.63 |
+| M1 | 0.89 | 1.88 | 0.86 | 2.00 | 1.85 | 2.92 | 2.59 | 0.70 |
+| M2 | 0.87 | 1.89 | 0.85 | 1.97 | 1.81 | 2.82 | 2.58 | 0.69 |
+| M3 | 1.55 | 2.55 | 2.14 | 3.45 | 2.44 | 2.35 | 2.92 | 1.23 |
+| M4 fill 0 | 1.07 | 1.53 | 1.01 | 1.81 | 1.87 | 2.05 | 2.41 | 0.88 |
+| M4 fill 1 | 1.65 | 2.29 | 1.44 | 2.54 | 2.58 | 2.99 | 3.21 | 1.33 |
+| M4 fill 2 | 1.41 | 1.80 | 1.13 | 1.92 | 2.16 | 2.02 | 2.26 | 1.13 |
 
 LPIPS:
 
@@ -129,34 +145,34 @@ LPIPS:
 ## Findings
 
 - **The baseline fails in motion, not at rest.**
-  - While the head is still, M0 is about 1.2° off, close to the spheres (1.0°).
-  - In the turns it averages 5–6.5° off, with peaks at 15°. It slips at 34–66°/s on average, over 100°/s at the
+  - While the head is still, M0 is about 1.1° off, close to the spheres (0.8–0.9°).
+  - In the turns it averages 4.3–5.4° off, with a peak of 16.6°. It slips at 33–64°/s on average, over 100°/s at the
     peaks.
   - It flickers 10× more than at rest, because each new frame jumps.
   - A still screenshot shows none of this.
 - **Rotation compensation is the largest single gain.**
-  - Against M0, the spheres (M1, M2) cut misregistration 3×, slip 6× and flicker 3×.
+  - Against M0, the spheres (M1, M2) cut misregistration 3×, slip 8–10× and flicker 3×.
   - What they leave is parallax:
     - Even at rest, the robot camera sits 2.7 cm from the eye, because the neck pivot moves it when the head is
       pitched down.
-    - During the lean their error doubles, to 2.3° and 11°/s.
+    - During the lean their error doubles, to about 1.9° and 4–6°/s.
   - M2's radius settled at 82–89 cm, because the desk fills the centre of the view. So on this trajectory M1 and M2 are
     nearly the same.
 - **Depth fixes the registration.**
-  - M4 is about 10× better than the spheres (0.10–0.14°), and M3 about 6× (0.22°).
+  - What M3 and M4 show is in place, at the measurement floor (0.03–0.04°, under 1 px), 25× better than the spheres.
   - But M3's holes are large: the sky and the room behind the doorway are beyond stereo range, plus the disocclusions.
     They make M3 the second worst on LPIPS, and its flicker is higher than the spheres'.
 - **Among the M4 fills, the motion metrics and the image metrics disagree.**
   - Fill 0 (sphere) has the best LPIPS and PSNR and the least flicker.
-  - Fill 2 (memory) is the most world-locked, at 0.10° and 2.1°/s. But it flickers more than fill 0 at rest (1.4 vs
-    1.1), and it shows stale fragments of the spinning fan and the robot hand. So its LPIPS is clearly worse than
-    fill 0's (0.185 vs 0.161).
+  - All three fills place content equally well (0.04°). Fill 2 (memory) slips least, at 1.7°/s against 1.9°/s. But it
+    flickers more than fill 0 at rest (1.4 vs 1.1), and it shows stale fragments of the spinning fan and the robot
+    hand. So its LPIPS is clearly worse than fill 0's (0.185 vs 0.161).
   - Fill 1 streaks, and its flicker is the highest of the three.
   - In the frozen evaluation, fill 2 led PSNR and tied fill 0 on LPIPS. In motion, fill 0 leads.
 - **No single number ranks the methods.**
   - Misregistration and slip rank M3 above the spheres; LPIPS and PSNR rank it below them.
   - The temporal metrics separate the baseline from everything else far more sharply than the per-frame ones do:
-    5.8× on slip, but only 1.8× on LPIPS.
+    M0 against M1 is 8× on slip, but only 1.8× on LPIPS.
 
 ## Limits
 
@@ -164,9 +180,13 @@ LPIPS:
   motion. To record real operator motion on the Quest and replay it here, use `teleop.Replay.Record <file>` and
   `teleop.Replay.Stop`.
 - Desktop, mono, left eye only: no binocular effects, and no headset compositor (which adds its own timewarp).
-- The flow-based metrics use median statistics over textured pixels. They say nothing about untextured areas, and
-  holes are excluded from misregistration and slip (flicker and LPIPS see them).
+- The flow-based metrics use median statistics over textured pixels. They say nothing about untextured areas.
+  Misregistration only scores content the method shows, so it cannot see holes, ghosts or stretched content; flicker,
+  LPIPS and PSNR do.
 - The renderer is not bit-exact between runs. The noise is far below the method differences.
+- The depth is ground truth with modelled errors, not stereo matching. The errors don't depend on image content, and
+  each frame carries its exact camera pose. So the sub-pixel registration of M3 and M4 holds for an exact pose and is
+  optimistic for a real robot; see the [repo README's limitations](../../../README.md#limitations-and-next-steps).
 
 ## Reproduce
 

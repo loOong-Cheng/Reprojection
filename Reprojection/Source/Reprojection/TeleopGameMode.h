@@ -48,8 +48,21 @@ public:
 	/** HUD line while no valid calibration exists (empty when calibrated). */
 	FString GetCalibrationWarning() const;
 
-	/** Operator tracking frame -> remote world (remote = local * T_map). Includes teleop.Debug.MapOffset* / MapYawDeg. */
+	/** Operator tracking frame -> remote world (remote = local * T_map). Includes teleop.Debug.MapOffset* / MapYawDeg and
+	 *  the commanded robot base offset now (a driving base, SetBaseCommand): the operator's eye now, for GT and the
+	 *  presentation. */
 	FTransform GetLocalToRemote() const;
+
+	/** The same mapping with the base command at Time (the robot side uses Now - command latency). */
+	FTransform GetLocalToRemoteAt(double Time) const;
+
+	/** Mobile base (trajectory replay): the commanded base pose relative to the station (station frame) at Time. The
+	 *  robot base follows it after the command latency, like the neck follows the head. */
+	void SetBaseCommand(double Time, const FTransform& OffsetInStation);
+	bool HasBaseMotion() const { return bHasBaseCommand; }
+
+	/** Where the robot base stands in the world at Time: the station moved by the base command then. */
+	FTransform GetRobotBaseAt(double Time) const;
 
 	FTransform GetStationTransform() const { return FTransform(FRotator(0.f, RobotStationYaw, 0.f), RobotStationLocation); }
 
@@ -87,7 +100,7 @@ public:
 	FVector OperatorRoomLocation = FVector(-100000.f, 0.f, 0.f);
 
 	/** Robot station on the Template floor: the seated operator's head maps above it, facing RobotStationYaw.
-	 *  Default: 40 cm in front of the Template desk's near edge (x = 100). */
+	 *  Default: 40 cm in front of the Template desk's near edge (x = 100). -TeleopStation=x,y,z,yaw overrides it. */
 	UPROPERTY(EditDefaultsOnly, Category = "Teleop")
 	FVector RobotStationLocation = FVector(60.f, 0.f, 0.f);
 
@@ -112,6 +125,15 @@ private:
 	FTeleopReplay Replay;
 
 	void RearmAutoRecenter(const TCHAR* Reason);
+
+	/** Where the props stand: the default station (by the desk), also when -TeleopStation moves the robot. */
+	FTransform PropsTransform = FTransform::Identity;
+
+	FTransform BaseOffsetAt(double Time) const;
+	FTransform MapWithBase(const FTransform& BaseOffset) const;
+	FTeleopPoseHistory BaseHistory;
+	FTransform BaseNow = FTransform::Identity;
+	bool bHasBaseCommand = false;
 
 	FTransform Calibration = FTransform::Identity;
 	float CalibratedEyeHeight = 120.f;

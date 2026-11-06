@@ -230,7 +230,7 @@ void ARemoteHand::Tick(float DeltaSeconds)
 		FTransform Local;
 		if (P->GetLocalHistory(bLeft ? ETeleopDevice::LeftHand : ETeleopDevice::RightHand).Sample(Now - CmdLatency, Local))
 		{
-			World = Local * GM->GetLocalToRemote();
+			World = Local * GM->GetLocalToRemoteAt(Now - CmdLatency); // the base, too, as the robot executes it
 			bValid = true;
 		}
 	}

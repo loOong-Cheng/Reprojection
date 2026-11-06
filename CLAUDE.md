@@ -139,6 +139,20 @@ imperfect depth, and lets the operator switch presentation/compensation methods 
   GT; needs opencv), `Tools/replay_gifs.py` (per-method TPV + eye GIFs, 3x3 compare grid; ffmpeg). `-TeleopSet="a=1;b=2"`
   sets CVars before the session starts (also outside replays). `teleop.Replay.Record <file>` / `teleop.Replay.Stop`
   record a live trajectory (VR too) to Saved/TeleopReplay/. Results: Saved/TeleopReplay/2026-11-05/.
+  Matrix (user request 2026-11-05: more motions incl. robot joint limits, other robot places, a driving robot,
+  latency levels, x methods): `-TeleopStation=x,y,z,yaw` moves the robot (the props stay at the default station, by the
+  desk; `FParse::Value` needs bShouldStopOnSeparator=false for comma lists). A driving base: trajectory columns bx, by,
+  byaw (station frame) -> `ATeleopGameMode::SetBaseCommand`; `GetLocalToRemote()` uses the base command now (GT, the
+  presentation, the observer's operator ghost), `GetLocalToRemoteAt(Now - L_cmd)` and `GetRobotBaseAt` the robot side
+  (RobotHead moves its actor there, neck targets and RemoteHand poses use it): the base executes the command after the
+  command latency, like the neck. `-TeleopReplayScale=2` saves frames box-filtered to 640x360. Motions in
+  `Tools/replay_trajectory.py --motion` (desk, turn, fastturn 375 deg/s, biglean 40 cm, standup 25 cm, tilt 25 deg,
+  strafe 80 cm, drive 100 cm; segments are written into the CSV), stations and latency levels in
+  `Tools/replay_matrix.py` (runs and scores per configuration, resumable, rescoring from kept frames; frames kept
+  unless `--delete-frames`, ~0.85 GB per configuration, 108 GB in all; a startup / hang watchdog kills and retries a
+  stuck game run once),
+  tables and charts `Tools/replay_matrix_report.py`. Full matrix: 896 game runs + scoring in 4.6 h with 3 game
+  processes at a time.
 - Controls (HANDOFF §8, adapted so nothing collides with grabbing or the robot fingers): the session starts in GT and A
   cycles GT>M1>M2>M3>M4>M0 (user, 2026-11-04: starting head-locked in M0 was unpleasant; `teleop.Method` values are
   unchanged, 0 = M0 ... 5 = GT) (blind: confirm); B latency preset; X neck mode (Fixed > Rot2DoF > Rot3DoF > Full6DoF > Waist3+Neck2; keyboard N);
@@ -287,12 +301,34 @@ imperfect depth, and lets the operator switch presentation/compensation methods 
 - Method comparison in motion (2026-11-05; user: still screenshots mislead, GIFs of every method on the same head and
   hand trajectory, temporal metrics). `Tools/replay_*`, 10 s scripted trajectory (turn 45 deg, grab and carry a cube,
   lean 15 cm, quick 30 deg look at 144 deg/s), WiFi, ZEDlike, Waist3Neck2, desktop left eye, 72 Hz fixed step. Means
-  over the run (misregistration deg / slip deg/s / flicker / LPIPS): M0 3.75 / 24.3 / 5.18 / 0.367, M1 1.28 / 4.2 / 1.82 /
-  0.206, M2 1.34 / 4.5 / 1.79 / 0.211 (R settled at 82-89 cm on the desk, so M2 = M1 here), M3 0.22 / 3.2 / 2.40 / 0.315,
-  M4 fill 0 0.12 / 2.4 / 1.64 / 0.161, fill 1 0.14 / 2.7 / 2.32 / 0.197, fill 2 0.10 / 2.1 / 1.76 / 0.185. M0 is 1.2 deg
-  off at rest (the spheres 1.0: the camera sits 2.7 cm from the eye with the head pitched) and 15 deg at peaks; fill 2
-  is the most world-locked but flickers more at rest and shows stale fan / hand fragments, so fill 0 leads LPIPS. A
-  repeat run reproduces every value. Write-up: `docs/eval/2026-11-05-replay/README.md`; GIFs `docs/img/replay/`.
+  over the run (misregistration deg / slip deg/s / flicker / LPIPS): M0 3.24 / 23.4 / 5.16 / 0.367, M1 1.07 / 2.8 / 1.79 /
+  0.206, M2 1.07 / 2.4 / 1.77 / 0.211 (R settled at 82-89 cm on the desk, so M2 = M1 here), M3 0.03 / 2.1 / 2.38 / 0.315,
+  M4 fill 0 0.04 / 1.9 / 1.63 / 0.161, fill 1 0.04 / 2.1 / 2.31 / 0.197, fill 2 0.04 / 1.7 / 1.75 / 0.185. M0 is 1.1 deg
+  off at rest (the spheres 0.8-0.9: the camera sits 2.7 cm from the eye with the head pitched) and 17 deg at peaks; what
+  M3 / M4 show is in place to under a pixel (their differences are the hole fills); fill 2 slips least but flickers
+  more at rest and shows stale fan / hand fragments, so fill 0 leads LPIPS. A repeat run reproduces every value.
+  Write-up: `docs/eval/2026-11-05-replay/README.md`; GIFs `docs/img/replay/`.
+  Misregistration metric (`replay_metrics.Flow`, corrected 2026-11-05, found by the matrix): DIS alone lost track above
+  ~10-15 deg (a 20 deg rotation read 3.5 deg; M0 at Bad latency read ~5.6 deg for 20-40 deg gaps) and the holes are not
+  black (they show the dark operator room, so a "black = hole" test finds nothing) and were scored. Now: DIS plus DIS
+  started from an ORB + RANSAC homography (OpenCV 5 DIS has no initial flow: residual flow against the warped image,
+  composed), the better-warping flow wins; exact ray angle; forward-backward consistency (1 px + 5%) keeps only content
+  the method shows; frames with < 5% of GT's textured content found are "unmatched" (no value; M0 at gaps > ~45 deg).
+  Synthetic rotations 1-40 deg within 2%; tolerance 1-4 px changes M0-M2 < 10%. Near large holes the backward flow is
+  unreliable, so "matched" undercounts correct content there (not a quality metric). Scoring runs per frame chunk (GT
+  flows once), ~2.3 min per matrix configuration with 4 workers.
+- Test matrix (2026-11-05/06; user: more motions incl. joint limits, other robot places, a driving robot, latency levels,
+  x methods). 8 motions x 4 stations (desk, side, room, far) x 4 latency presets (Ideal, WiFi, Remote, Bad) x GT + 7
+  presentations = 896 deterministic replays, ZEDlike, Waist3Neck2, M4 on the adaptive sphere. Write-up with tables,
+  charts and 7 compare GIFs: `docs/eval/2026-11-05-matrix/README.md` (all tables `tables.md`, data `matrix.csv`,
+  `gaps.csv`); frames (desk/wifi and desk/bad with observer frames) in Saved/TeleopReplay/matrix/. Findings: M3 / M4
+  misregistration 0.01-0.21 deg in every configuration, flat in latency (M4 > M3 at side / room only because the sphere
+  fill shows where the back walls have no ZEDlike depth); M4 best LPIPS in 128/128 (sphere fill leads at desk / side /
+  room, memory at far); M1 worse than M0 for translation (strafe, drive, biglean, standup) in 12-14/16 per motion, the
+  d > 2R case, M2 fixes it except strafe at the desk (its central window lands on a near object, R 88 -> 60 cm); the
+  joint-limit gaps (standup 15 cm, tilt 14 deg) do not depend on latency; fastturn at Bad: M0 loses the view (< 5% of GT
+  found) in 9-16% of frames. Metric limit: tilt at far, M0 "loses" 4-12% of frames at every latency because ORB finds
+  too few matches on the rolled, repetitive floor tiles (the image is complete).
 - How to measure: `teleop.Debug.QuitAfterSec N` exits cleanly; the module logs `[fps]` every 2 s (any game mode);
   the presenter logs `[stats]` (frame age + fps). Run-to-run spread on the simulator is +-3 fps; if a run hangs at
   frame 0, restart `MetaXRSimulator.exe`. Make sure `synth_env_server.exe` is not running (see the XR runtime section). Plain Template baseline:

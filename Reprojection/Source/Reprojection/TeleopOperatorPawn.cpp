@@ -279,6 +279,10 @@ void ATeleopOperatorPawn::RecordPoses(double Now)
 	ATeleopGameMode* GM = GetWorld()->GetAuthGameMode<ATeleopGameMode>();
 	FTeleopTrajectorySample Replay;
 	const bool bReplay = GM && GM->GetReplay().GetSample(Replay);
+	if (bReplay && Replay.bHasBase)
+	{
+		GM->SetBaseCommand(Now, Replay.Base); // a driving robot: the base command, executed after the command latency
+	}
 
 	// Head
 	FTransform Head;

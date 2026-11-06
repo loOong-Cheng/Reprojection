@@ -16,7 +16,9 @@
 #include "GameFramework/Controller.h"
 #include "HAL/IConsoleManager.h"
 #include "HAL/PlatformTime.h"
+#include "Misc/CommandLine.h"
 #include "Misc/CoreDelegates.h"
+#include "Misc/Parse.h"
 
 static FAutoConsoleCommandWithWorld GTeleopRecenterCommand(
 	TEXT("teleop.Recenter"),
@@ -38,6 +40,21 @@ ATeleopGameMode::ATeleopGameMode()
 void ATeleopGameMode::InitGame(const FString& MapName, const FString& Options, FString& ErrorMessage)
 {
 	Super::InitGame(MapName, Options, ErrorMessage);
+	// The props belong to the scene (at the default station, by the desk); only the robot moves.
+	PropsTransform = GetStationTransform();
+	FString Station;
+	if (FParse::Value(FCommandLine::Get(), TEXT("TeleopStation="), Station, /*bShouldStopOnSeparator*/ false))
+	{
+		// -TeleopStation=x,y,z,yaw (cm, deg): put the robot (and the operator's mapping) somewhere else in the scene.
+		TArray<FString> V;
+		Station.ParseIntoArray(V, TEXT(","));
+		if (V.Num() >= 3)
+		{
+			RobotStationLocation = FVector(FCString::Atod(*V[0]), FCString::Atod(*V[1]), FCString::Atod(*V[2]));
+			RobotStationYaw = V.Num() >= 4 ? FCString::Atof(*V[3]) : RobotStationYaw;
+			UE_LOG(LogTeleop, Log, TEXT("Robot station from the command line: %s yaw %.1f"), *RobotStationLocation.ToString(), RobotStationYaw);
+		}
+	}
 	Replay.Init(this);
 }
 
@@ -98,7 +115,7 @@ void ATeleopGameMode::SetupSession(ATeleopOperatorPawn* Pawn)
 	const FTransform Station = GetStationTransform();
 
 	Logger = MakeUnique<FTeleopLogger>();
-	Props = World->SpawnActor<ATeleopProps>(ATeleopProps::StaticClass(), Station, Params);
+	Props = World->SpawnActor<ATeleopProps>(ATeleopProps::StaticClass(), PropsTransform, Params);
 
 	LeftHand = World->SpawnActor<ARemoteHand>(ARemoteHand::StaticClass(), Station, Params);
 	RightHand = World->SpawnActor<ARemoteHand>(ARemoteHand::StaticClass(), Station, Params);
@@ -119,14 +136,46 @@ void ATeleopGameMode::SetupSession(ATeleopOperatorPawn* Pawn)
 	UE_LOG(LogTeleop, Log, TEXT("Session: robot station at %s yaw %.1f"), *RobotStationLocation.ToString(), RobotStationYaw);
 }
 
-FTransform ATeleopGameMode::GetLocalToRemote() const
+FTransform ATeleopGameMode::MapWithBase(const FTransform& BaseOffset) const
 {
 	// Debug offset in the calibrated station frame, where the calibrated head is at (0, 0, eye height): the yaw turns
-	// about the head's vertical axis.
+	// about the head's vertical axis. The base offset moves the whole station frame (a driving robot).
 	const FTransform DebugOffset(FRotator(0.f, TeleopCVars::DebugMapYawDeg.GetValueOnGameThread(), 0.f),
 		FVector(TeleopCVars::DebugMapOffsetX.GetValueOnGameThread(), TeleopCVars::DebugMapOffsetY.GetValueOnGameThread(),
 			TeleopCVars::DebugMapOffsetZ.GetValueOnGameThread()));
-	return Calibration * DebugOffset * GetStationTransform();
+	return Calibration * DebugOffset * BaseOffset * GetStationTransform();
+}
+
+FTransform ATeleopGameMode::GetLocalToRemote() const
+{
+	return MapWithBase(BaseNow);
+}
+
+FTransform ATeleopGameMode::BaseOffsetAt(double Time) const
+{
+	FTransform Offset = FTransform::Identity;
+	if (bHasBaseCommand)
+	{
+		BaseHistory.Sample(Time, Offset);
+	}
+	return Offset;
+}
+
+FTransform ATeleopGameMode::GetLocalToRemoteAt(double Time) const
+{
+	return MapWithBase(BaseOffsetAt(Time));
+}
+
+FTransform ATeleopGameMode::GetRobotBaseAt(double Time) const
+{
+	return BaseOffsetAt(Time) * GetStationTransform();
+}
+
+void ATeleopGameMode::SetBaseCommand(double Time, const FTransform& OffsetInStation)
+{
+	BaseNow = OffsetInStation;
+	BaseHistory.Add(Time, OffsetInStation);
+	bHasBaseCommand = true;
 }
 
 void ATeleopGameMode::BeginPlay()

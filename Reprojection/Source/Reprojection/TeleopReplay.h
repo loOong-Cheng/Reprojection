@@ -15,12 +15,16 @@ struct FTeleopTrajectorySample
 	FTransform Head;
 	FTransform Hand[2]; // [0] = left
 	FTeleopFingerState Fingers[2];
+	/** Commanded robot base pose relative to the station (station frame): a driving robot. Identity = standing. */
+	FTransform Base;
+	bool bHasBase = false;
 };
 
 /**
  * Operator trajectory as CSV, one row per sample, columns (header names, any order):
  *   t (s); hx hy hz hpitch hyaw hroll; lx ly lz lpitch lyaw lroll; rx ry rz rpitch ryaw rroll (cm, deg);
- *   lgrasp lcurl lpoint lthumb rgrasp rcurl rpoint rthumb (0..1). Lines starting with # are comments.
+ *   lgrasp lcurl lpoint lthumb rgrasp rcurl rpoint rthumb (0..1); optional bx by byaw (cm, deg): the commanded robot
+ *   base offset in the station frame (a driving robot). Lines starting with # are comments.
  * Tools/replay_trajectory.py writes one; teleop.Replay.Record records one live.
  */
 class REPROJECTION_API FTeleopTrajectory
@@ -49,6 +53,8 @@ private:
  *   -UseFixedTimeStep -FPS=<hz>        required: TeleopClock counts frames, so every run sees the same times
  *   -TeleopReplay=<trajectory.csv>     play it: head, hands, fingers; a grip crossing 0.5 grabs / releases
  *   -TeleopSet="cvar=value;..."        console variables applied before the session starts (method, latency, ...)
+ *   -TeleopStation=x,y,z,yaw           put the robot somewhere else (ATeleopGameMode; the props stay at the desk)
+ *   -TeleopReplayScale=<n>             save frames downsampled n x n (box filter; 1 = full resolution)
  *   -TeleopReplayOut=<dir>             write eye_%05d.png (game viewport, every frame from -TeleopReplayFrom=<s>),
  *                                      obs_%05d.png (observer view, every -TeleopReplayObsEvery=<n> frames; 0 = none),
  *                                      frames.csv (per frame: time, shown frame, its age, eye - camera offset, R)
@@ -80,10 +86,11 @@ private:
 	void WriteFrameRow(int32 FrameIndex, double T);
 	void LogScene() const;
 	void Finish();
-	void QueueWrite(FString Path, int32 Width, int32 Height, TArray<FColor> Pixels);
+	void QueueWrite(FString Path, int32 Width, int32 Height, TArray<FColor> Pixels, int32 Scale = 1);
 
 	TWeakObjectPtr<ATeleopGameMode> GameMode;
 	FTeleopTrajectory Trajectory;
+	bool bTrajectoryHasBase = false;
 	bool bPlaying = false;
 	bool bFinished = false;
 	bool bSceneLogged = false;
@@ -92,6 +99,7 @@ private:
 	FString OutDir;
 	double OutFrom = 0.0;
 	int32 ObsEvery = 0;
+	int32 SaveScale = 1;
 	int32 PendingEyeFrame = INDEX_NONE;
 	int32 FramesWritten = 0;
 	TUniquePtr<FArchive> FramesCsv;

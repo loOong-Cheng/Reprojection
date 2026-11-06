@@ -16,7 +16,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from replay_trajectory import SEGMENTS  # noqa: E402
+from replay_trajectory import read_segments  # noqa: E402
 
 ORDER = ["M0", "M1", "M2", "M3", "M4f0", "M4f1", "M4f2"]
 TITLE = {"M0": "M0 head-locked (baseline)", "M1": "M1 sphere, R 1 m", "M2": "M2 sphere, adaptive R", "M3": "M3 depth mesh",
@@ -33,6 +33,8 @@ def main():
     ap.add_argument("out")
     ap.add_argument("--metric", default="reg_deg")
     a = ap.parse_args()
+    SEGMENTS = read_segments(os.path.join(a.run, "trajectory.csv"))
+    short = SHORT_SEG if len(SHORT_SEG) == len(SEGMENTS) else [""] + [n.split(" ")[0] for n, _, _ in SEGMENTS[1:-1]] + [""]
 
     series = defaultdict(list)
     with open(os.path.join(a.run, "metrics_frames.csv"), newline="") as f:
@@ -69,7 +71,7 @@ def main():
     ax.plot([t for t, _ in head], [v for _, v in head], color=INK2, linewidth=1.2)
     ax.set_title("Operator: head turn speed (deg/s)", loc="left")
     top = max(v for _, v in head)
-    for k, ((name, s0, s1), short) in enumerate(zip(SEGMENTS, SHORT_SEG)):
+    for k, ((name, s0, s1), short) in enumerate(zip(SEGMENTS, short)):
         if short:  # staggered so neighbours do not collide
             ax.text((s0 + s1) / 2, top * (1.03 if k % 2 else 1.16), short, ha="center", va="bottom", fontsize=7.5, color=INK2)
     ax.set_ylim(0, top * 1.3)
